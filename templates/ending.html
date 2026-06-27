@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Cursed Canvas — Your Story</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        body {
+            overflow-y: auto;
+            height: auto;
+            min-height: 100vh;
+            display: block;
+        }
+        #story-container {
+            position: relative;
+            z-index: 1;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 30px 80px;
+        }
+        #story-container h1 {
+            font-size: 2rem;
+            color: var(--accent-gold);
+            text-align: center;
+            margin-bottom: 8px;
+            letter-spacing: 0.04em;
+            font-family: var(--font-body);
+        }
+        #story-container .subtitle {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            margin-bottom: 40px;
+            font-style: italic;
+            font-family: var(--font-body);
+        }
+        #story-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 30px;
+            line-height: 1.8;
+            font-size: 1rem;
+            color: var(--text-primary);
+            margin-bottom: 30px;
+            font-family: var(--font-body);
+        }
+        #story-content h2 {
+            color: var(--accent-gold);
+            font-size: 1.3rem;
+            margin: 24px 0 12px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 6px;
+        }
+        #story-content h3 {
+            color: var(--accent-blue);
+            font-size: 1.1rem;
+            margin: 18px 0 8px;
+        }
+        #story-content p {
+            margin-bottom: 12px;
+        }
+        #story-content strong {
+            color: var(--accent-gold);
+        }
+        #story-content em {
+            color: var(--accent-blue);
+        }
+        .credits {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            font-family: var(--font-body);
+        }
+        .credits strong {
+            color: var(--accent-gold);
+        }
+        #download-bar {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 30px;
+        }
+        .download-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .download-group button {
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            color: var(--text-primary);
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: var(--font-ui);
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .download-group select {
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            color: var(--text-primary);
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-family: var(--font-ui);
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .download-group button:hover {
+            background: var(--accent-gold);
+            color: var(--bg-deep);
+            border-color: var(--accent-gold);
+        }
+        #return-bar {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 100;
+        }
+        #return-bar button {
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            color: var(--accent-gold);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: var(--font-ui);
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+        #return-bar button:hover {
+            background: var(--accent-gold);
+            color: var(--bg-deep);
+        }
+        .loading-story {
+            text-align: center;
+            color: var(--text-dim);
+            padding: 60px 0;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body data-world="museum">
+    <div id="parallax-bg"></div>
+    <canvas id="particles-canvas"></canvas>
+
+    <div id="return-bar">
+        <button id="return-btn">← Return to Game</button>
+    </div>
+
+    <div id="story-container">
+        <h1>The Cursed Canvas</h1>
+        <p class="subtitle">Your Adventure, Retold</p>
+
+        <div id="story-content">
+            <p class="loading-story">Weaving your story from the threads of adventure...</p>
+        </div>
+
+        <div class="credits">
+            <p><strong>The Cursed Canvas</strong></p>
+            <p>A text adventure by Daihong Luo & Xinzhi Bao</p>
+            <p>CPS 3320 — Python Programming, June 2026</p>
+            <p style="margin-top: 12px;">Powered by DeepSeek API &bull; Flask &bull; Vanilla JS</p>
+            <p style="margin-top: 8px; font-style: italic;">"Every painting is a window into another world.<br>You stepped through, and brought the light back."</p>
+        </div>
+
+        <div id="download-bar">
+            <div class="download-group">
+                <button id="dl-story-btn">Download Story</button>
+                <select id="story-format">
+                    <option value="image">PNG (Default)</option>
+                    <option value="markdown">Markdown</option>
+                </select>
+            </div>
+            <div class="download-group">
+                <button id="dl-chat-btn">Download Dialogue Timeline</button>
+                <select id="chat-format">
+                    <option value="image">PNG (Default)</option>
+                    <option value="markdown">Markdown</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const storyContent = document.getElementById("story-content");
+        let storyMarkdown = "";
+        let chatMarkdown = "";
+
+        async function loadStory() {
+            try {
+                const resp = await fetch("/api/story");
+                if (!resp.ok) throw new Error("Failed to load story");
+                const data = await resp.json();
+                storyMarkdown = data.story || "";
+                chatMarkdown = data.chat_log || "";
+                storyContent.innerHTML = markdownToHtml(storyMarkdown);
+            } catch (e) {
+                storyContent.innerHTML = "<p>Failed to load your story. Please try again later.</p>";
+                console.error(e);
+            }
+        }
+
+        function markdownToHtml(md) {
+            return md
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/\n/g, '<br>')
+                .replace(/^/, '<p>')
+                .replace(/$/, '</p>');
+        }
+
+        function downloadFile(content, filename, type) {
+            const blob = new Blob([content], { type: type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        async function downloadAsImage(content, filename) {
+            const tempDiv = document.createElement("div");
+            tempDiv.style.position = "absolute";
+            tempDiv.style.left = "-9999px";
+            tempDiv.style.width = "800px";
+            tempDiv.style.padding = "40px";
+            tempDiv.style.background = "#1a1a2e";
+            tempDiv.style.color = "#e8e0d0";
+            tempDiv.style.fontFamily = "Georgia, serif";
+            tempDiv.style.fontSize = "14px";
+            tempDiv.style.lineHeight = "1.8";
+            tempDiv.innerHTML = markdownToHtml(content);
+            document.body.appendChild(tempDiv);
+
+            try {
+                const canvas = await html2canvas(tempDiv, {
+                    backgroundColor: "#1a1a2e",
+                    scale: 2,
+                    useCORS: true
+                });
+                canvas.toBlob((blob) => {
+                    if (blob) {
+                        const a = document.createElement("a");
+                        a.href = URL.createObjectURL(blob);
+                        a.download = filename;
+                        a.click();
+                        URL.revokeObjectURL(a.href);
+                    }
+                }, "image/png");
+            } catch (e) {
+                alert("Image download failed. Please try the Markdown option instead.");
+                console.error(e);
+            } finally {
+                document.body.removeChild(tempDiv);
+            }
+        }
+
+        document.getElementById("dl-story-btn").addEventListener("click", () => {
+            const format = document.getElementById("story-format").value || "image";
+            if (format === "image") {
+                downloadAsImage(storyMarkdown, "cursed_canvas_story.png");
+            } else {
+                downloadFile(storyMarkdown, "cursed_canvas_story.md", "text/markdown");
+            }
+        });
+
+        document.getElementById("dl-chat-btn").addEventListener("click", () => {
+            const format = document.getElementById("chat-format").value || "image";
+            if (format === "image") {
+                downloadAsImage(chatMarkdown, "cursed_canvas_dialogue_timeline.png");
+            } else {
+                downloadFile(chatMarkdown, "cursed_canvas_dialogue_timeline.md", "text/markdown");
+            }
+        });
+
+        document.getElementById("return-btn").addEventListener("click", async () => {
+            try {
+                await fetch("/api/return", { method: "POST" });
+            } catch (e) { /* ignore */ }
+            window.location.href = "/";
+        });
+
+        loadStory();
+    </script>
+</body>
+</html>

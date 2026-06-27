@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Cursed Canvas</title>
+    <link rel="stylesheet" href="/static/style.css?v=experience-mode-20260627b">
+</head>
+<body data-world="museum">
+    <!-- Background layers -->
+    <div id="parallax-bg"></div>
+    <canvas id="particles-canvas"></canvas>
+    <div id="world-transition" class="hidden"></div>
+
+    <!-- Loading overlay -->
+    <div id="loading-overlay">
+        <div id="loading-box">
+            <h2>The Cursed Canvas</h2>
+            <p id="loading-msg">Preparing the museum...</p>
+            <div id="loading-spinner"></div>
+        </div>
+    </div>
+
+    <!-- Start screen -->
+    <section id="start-screen" aria-label="Start screen">
+        <canvas id="start-particles-canvas"></canvas>
+        <div id="start-menu" class="start-view active">
+            <p class="start-kicker">Midnight Museum</p>
+            <h1 class="start-title" data-text="The Cursed Canvas">The Cursed Canvas</h1>
+            <nav class="start-actions" aria-label="Main menu">
+                <button class="start-btn primary" id="new-adventure-btn" type="button">New Adventure</button>
+                <button class="start-btn" id="continue-game-btn" type="button">Continue</button>
+                <button class="start-btn" id="gallery-btn" type="button">Gallery</button>
+                <button class="start-btn" id="settings-btn" type="button">Settings</button>
+            </nav>
+            <p id="start-status" aria-live="polite"></p>
+        </div>
+
+        <article id="gallery-view" class="start-view" aria-label="Restoration gallery" tabindex="-1">
+            <div class="gallery-topbar">
+                <button class="gallery-back-btn" id="gallery-back-btn" type="button">Back</button>
+                <p class="start-kicker">Restoration Gallery</p>
+            </div>
+            <div class="gallery-stage">
+                <button class="gallery-arrow" id="gallery-prev-btn" type="button" aria-label="Previous gallery page">&lsaquo;</button>
+                <section id="gallery-page" aria-live="polite"></section>
+                <button class="gallery-arrow" id="gallery-next-btn" type="button" aria-label="Next gallery page">&rsaquo;</button>
+            </div>
+            <div id="gallery-indicator" aria-label="Gallery pages"></div>
+        </article>
+
+        <article id="settings-view" class="start-view" aria-label="Settings" tabindex="-1">
+            <div class="settings-card">
+                <div class="settings-topbar">
+                    <button class="settings-back-btn" id="settings-back-btn" type="button">Back</button>
+                    <p class="start-kicker">Settings</p>
+                </div>
+
+                <section class="settings-section">
+                    <p class="settings-kicker">Display</p>
+                    <div class="settings-section-heading">
+                        <h2>Language</h2>
+                        <p>Choose the interface language. More languages will be added later.</p>
+                    </div>
+                    <div class="settings-stepper" role="group" aria-label="Display language">
+                        <button class="settings-arrow" id="language-prev-btn" type="button" aria-label="Previous language">&lsaquo;</button>
+                        <div class="settings-stepper-value" id="language-value" aria-live="polite">English</div>
+                        <button class="settings-arrow" id="language-next-btn" type="button" aria-label="Next language">&rsaquo;</button>
+                    </div>
+                </section>
+
+                <section class="settings-section">
+                    <p class="settings-kicker">AI Configuration</p>
+                    <div class="settings-section-heading">
+                        <h2>Model</h2>
+                        <p>Switch between the online API and the local model.</p>
+                    </div>
+                    <div class="settings-stepper model-stepper" role="group" aria-label="Model provider">
+                        <button class="settings-arrow" id="model-prev-btn" type="button" aria-label="Previous model">&lsaquo;</button>
+                        <div class="settings-stepper-value" id="model-provider-value" aria-live="polite">DeepSeek API</div>
+                        <button class="settings-arrow" id="model-next-btn" type="button" aria-label="Next model">&rsaquo;</button>
+                    </div>
+
+                    <div class="settings-model-panel" id="deepseek-settings-panel" data-model-panel="api">
+                        <div class="settings-panel-heading">
+                            <strong>Experience Mode</strong>
+                            <span>Default</span>
+                        </div>
+                        <div class="settings-meter-row">
+                            <span>Remaining Tokens</span>
+                            <strong id="experience-token-percent">100%</strong>
+                        </div>
+                        <div class="settings-meter" aria-hidden="true">
+                            <span id="experience-token-bar" style="width: 100%;"></span>
+                        </div>
+                        <p class="settings-note" id="experience-token-note">Experience mode uses the currently configured API with a limited token pool.</p>
+                        <div class="settings-inline-form">
+                            <input id="experience-unlock-input" type="password" autocomplete="off" placeholder="Enter author unlock key">
+                            <button id="experience-unlock-btn" class="settings-action-btn" type="button">Unlock</button>
+                        </div>
+
+                        <label class="settings-checkbox-row" for="personal-api-toggle">
+                            <input id="personal-api-toggle" type="checkbox">
+                            <span>I have a personal API key</span>
+                        </label>
+
+                        <div class="settings-personal-fields hidden" id="personal-api-fields">
+                            <label class="settings-label" for="personal-api-key-input">DeepSeek API Key</label>
+                            <div class="settings-inline-form">
+                                <input id="personal-api-key-input" type="text" autocomplete="off" spellcheck="false" placeholder="Enter your DeepSeek API Key">
+                                <button id="personal-api-save-btn" class="settings-action-btn" type="button">Save</button>
+                            </div>
+                            <p class="settings-note" id="personal-api-help">No API key is configured. Enter your DeepSeek API Key here.</p>
+                        </div>
+                    </div>
+
+                    <div class="settings-model-panel hidden" id="local-model-settings-panel" data-model-panel="local">
+                        <div class="settings-status-row">
+                            <span id="local-model-dot" class="status-dot offline"></span>
+                            <strong id="local-model-status">Unavailable</strong>
+                        </div>
+                        <div class="settings-meter-row">
+                            <span>Load Progress</span>
+                            <strong id="local-model-percent">0%</strong>
+                        </div>
+                        <div class="settings-meter" aria-hidden="true">
+                            <span id="local-model-progress-bar" style="width: 0%;"></span>
+                        </div>
+                        <p class="settings-note" id="local-model-detail">The local model is prewarming in the background when available.</p>
+                        <p class="settings-note warning">The local model is weaker and may feel less responsive. DeepSeek API is recommended for the best experience.</p>
+                    </div>
+                </section>
+
+                <p id="settings-status" aria-live="polite"></p>
+            </div>
+        </article>
+
+        <article id="intro-story" class="start-view" aria-label="Story introduction" tabindex="-1">
+            <p class="start-kicker">Before the First Step</p>
+            <h2>After Midnight, the Frames Began to Whisper</h2>
+            <div class="intro-copy">
+                <p>The rain had stopped by the time you reached the museum steps. You had only meant to retrieve something left behind after closing, but the final gallery light went dark before you found your way back out.</p>
+                <p>Then the doors locked themselves. Moonlight spilled across the marble floor, and somewhere beyond the central hall a frame gave a soft, impossible crackle, as if canvas were taking a breath.</p>
+                <p>A note waited on the curator's desk: the museum's paintings were losing their colors, one world at a time. If no one stepped inside before dawn, the curse would spread from frame to frame until every doorway became a wall.</p>
+                <p>You are alone in the midnight gallery, with only the whispering paintings to guide you. The first frame shimmers. The journey begins when you choose to cross it.</p>
+            </div>
+            <p id="intro-continue">Press any key to continue</p>
+        </article>
+    </section>
+
+    <!-- Main game container -->
+    <div id="game-container">
+        <!-- Left: Narrative panel -->
+        <div id="narrative-panel">
+            <header id="game-header">
+                <h1>The Cursed Canvas</h1>
+                <div id="header-status">
+                    <span id="location-badge">Museum</span>
+                    <span id="response-badge" class="dm" style="display:none">DM</span>
+                </div>
+            </header>
+            <main id="chat-log"></main>
+            <footer id="input-area">
+                <form id="command-form" autocomplete="off">
+                    <input type="text" id="command-input"
+                           placeholder="(...) for actions, or just type to talk" maxlength="300" autofocus>
+                    <button type="submit" id="send-btn">Send</button>
+                </form>
+                <div id="quick-actions">
+                    <button class="quick-btn" data-cmd="(look around)">Look Around</button>
+                    <button class="quick-btn" data-cmd="(enter starry night)">Starry Night</button>
+                    <button class="quick-btn" data-cmd="(enter great wave)">Great Wave</button>
+                    <button class="quick-btn" data-cmd="(enter impression sunrise)">Sunrise</button>
+                    <button class="quick-btn" data-cmd="(help)">Help</button>
+                <button id="panel-toggle" title="Toggle info panel" class="quick-btn info-toggle-btn">Info Panel</button>
+                </div>
+            </footer>
+        </div>
+
+        <!-- Right: Side info panel -->
+        <aside id="side-panel">
+            <!-- Location card -->
+            <div class="info-card" id="location-card">
+                <h3>Location</h3>
+                <p id="location-name">The Enchanted Museum</p>
+                <p id="location-desc">A grand, moonlit gallery with marble floors.</p>
+                <div id="exits-list"></div>
+            </div>
+
+            <!-- Inventory card -->
+            <div class="info-card" id="inventory-card">
+                <h3>Inventory</h3>
+                <ul id="inventory-list">
+                    <li class="empty-inv">Empty</li>
+                </ul>
+                <button class="session-save-btn inventory-open-btn" id="open-inventory-btn" type="button">Open Inventory</button>
+            </div>
+
+            <!-- Quest tracker card -->
+            <div class="info-card" id="quest-card">
+                <h3>Quests</h3>
+                <div class="quest-item" data-quest="starry_night">
+                    <span class="quest-status pending">&#9675;</span>
+                    <span>Starry Night</span>
+                </div>
+                <div class="quest-item" data-quest="great_wave">
+                    <span class="quest-status pending">&#9675;</span>
+                    <span>The Great Wave</span>
+                </div>
+                <div class="quest-item" data-quest="impression_sunrise">
+                    <span class="quest-status pending">&#9675;</span>
+                    <span>Impression, Sunrise</span>
+                </div>
+            </div>
+
+            <!-- NPC card (hidden until NPC present) -->
+            <div class="info-card" id="npc-card" style="display:none">
+                <div class="npc-portrait-large" id="npc-portrait-large"></div>
+                <h3 id="npc-name-display"></h3>
+                <p id="npc-role-display"></p>
+            </div>
+
+            <!-- Model status card -->
+            <div class="info-card" id="model-card">
+                <h3>AI Model</h3>
+                <div id="model-toggle">
+                    <button class="toggle-btn active" data-mode="api">DeepSeek API</button>
+                    <button class="toggle-btn" data-mode="local">Local Model</button>
+                </div>
+                <p id="model-status-text">
+                    <span class="status-dot online"></span> DeepSeek API &mdash; Ready
+                </p>
+            </div>
+
+            <!-- Session card -->
+            <div class="info-card" id="session-card">
+                <h3>Session</h3>
+                <button class="session-save-btn" id="save-progress-btn" type="button">Save Progress</button>
+                <button class="danger-btn" id="end-game-btn" type="button">End Game</button>
+            </div>
+        </aside>
+    </div>
+
+    <div id="end-game-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="end-game-title">
+        <div class="dialog-card">
+            <h2 id="end-game-title">End this adventure?</h2>
+            <p>Your current run will return to the main menu. Save your progress first if you want to continue later.</p>
+            <div class="dialog-actions">
+                <button class="dialog-btn secondary" id="cancel-end-game-btn" type="button">Cancel</button>
+                <button class="dialog-btn danger" id="confirm-end-game-btn" type="button">Return to Main Menu</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="save-slot-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="save-slot-title">
+        <div class="save-dialog-card">
+            <div class="save-dialog-topbar">
+                <div>
+                    <p class="start-kicker" id="save-slot-kicker">Slot Archive</p>
+                    <h2 id="save-slot-title">Load Slot</h2>
+                </div>
+                <button class="save-close-btn" id="save-slot-close-btn" type="button" aria-label="Close slots">&times;</button>
+            </div>
+            <p class="save-dialog-copy" id="save-slot-copy">Choose an existing slot to load.</p>
+            <div id="save-slot-list" class="save-slot-list" aria-live="polite"></div>
+            <p id="save-slot-status" class="save-slot-status" aria-live="polite"></p>
+        </div>
+    </div>
+
+    <div id="inventory-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="inventory-title">
+        <div class="save-dialog-card inventory-dialog-card">
+            <div class="save-dialog-topbar">
+                <div>
+                    <p class="start-kicker">Item Archive</p>
+                    <h2 id="inventory-title">Inventory</h2>
+                </div>
+                <button class="save-close-btn" id="inventory-close-btn" type="button" aria-label="Close inventory">&times;</button>
+            </div>
+            <p class="save-dialog-copy">Everything you have collected is organized here by world.</p>
+            <div id="inventory-sections" class="inventory-sections" aria-live="polite"></div>
+            <p id="inventory-status" class="save-slot-status inventory-status" aria-live="polite"></p>
+        </div>
+    </div>
+
+    <div id="confirm-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div class="dialog-card">
+            <h2 id="confirm-title">Confirm Action</h2>
+            <p id="confirm-message">Are you sure?</p>
+            <div class="dialog-actions">
+                <button class="dialog-btn secondary" id="confirm-cancel-btn" type="button">Cancel</button>
+                <button class="dialog-btn danger" id="confirm-action-btn" type="button">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/game.js?v=experience-mode-20260627b"></script>
+</body>
+</html>

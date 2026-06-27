@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+venv/
+.env
+.env.*
+!.env.example
+*.pkl
+!models/*.pkl
+node_modules/
+build/
+dist/
+data/save_slots.json
+*.spec.bak
+experience_proxy/*.sqlite3
+experience_proxy/*.sqlite3-*

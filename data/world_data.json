@@ -1,0 +1,289 @@
+{
+  "game": {
+    "title": "The Cursed Canvas",
+    "intro": "You are a visitor locked inside a magical museum at midnight. Famous paintings have become portals to fantasy worlds. To escape, you must step into the paintings and restore each artwork."
+  },
+  "worlds": {
+    "museum": {
+      "name": "The Enchanted Museum",
+      "description": "A grand, moonlit gallery with marble floors and towering walls. Three paintings glow faintly in their gilded frames: to your left, a swirling night sky by Van Gogh; to your right, a towering wave by Hokusai; and straight ahead, a misty harbor sunrise by Monet.",
+      "short_desc": "You stand in the moonlit museum gallery.",
+      "npcs": [],
+      "items_available": [],
+      "exits": [
+        {
+          "target": "starry_night",
+          "description": "Step into the Starry Night painting"
+        },
+        {
+          "target": "great_wave",
+          "description": "Step into the Great Wave painting"
+        },
+        {
+          "target": "impression_sunrise",
+          "description": "Step into the Impression, Sunrise painting"
+        }
+      ],
+      "background": "museum"
+    },
+    "starry_night": {
+      "name": "Starry Night",
+      "artist": "Vincent van Gogh",
+      "art_period": "Post-Impressionism (1889)",
+      "description": "You stand within a swirling dreamscape of deep blue and luminous gold. The sky churns like a living ocean -- cypress trees twist upward like dark flames, a crescent moon casts silver light across a sleeping village below, and stars pulse with fading light. A path leads toward a cottage where warm candlelight flickers.",
+      "short_desc": "A swirling dreamscape of stars and cypress trees.",
+      "npcs": [
+        "van_gogh"
+      ],
+      "items_available": [
+        "lantern"
+      ],
+      "items_hidden": {
+        "yellow_pigment": {
+          "location_desc": "a shadowy alcove behind the cypress tree",
+          "reveal_item": "lantern",
+          "reveal_msg": "The lantern's light catches something glinting in a shadowy alcove -- a small tube of brilliant yellow paint, still warm."
+        }
+      },
+      "exits": [
+        {
+          "target": "museum",
+          "description": "Step back through the painting frame"
+        }
+      ],
+      "quest_goal": "recover_stolen_yellow",
+      "quest_description": "Van Gogh's stars have gone dark -- the yellow pigment was stolen. Find it and return it to him.",
+      "quest_completion": "You hand the yellow pigment to Van Gogh. A ray of brilliant golden light bursts forth as he sweeps it across the canvas-sky. The stars ignite -- blazing vortices of pure light. 'The yellow returns! My stars sing again!' The Starry Night painting is restored.",
+      "background": "starry_night"
+    },
+    "great_wave": {
+      "name": "The Great Wave off Kanagawa",
+      "artist": "Katsushika Hokusai",
+      "art_period": "Edo-period Ukiyo-e (1831)",
+      "description": "You find yourself on a wooden fishing boat upon a restless sea. An enormous wave rises like a clawed hand against a pale sky -- frozen mid-crash, trembling with contained energy. Mount Fuji stands serene in the distance. A weathered old man in a simple kimono stands at the prow, studying the wave with calm, ancient eyes.",
+      "short_desc": "A stormy sea beneath a towering frozen wave.",
+      "npcs": [
+        "hokusai"
+      ],
+      "items_available": [
+        "shell_flute"
+      ],
+      "items_hidden": {
+        "calming_stone": {
+          "location_desc": "nestled among rocks near the shore",
+          "reveal_item": "shell_flute",
+          "reveal_msg": "As you search the shoreline, you notice a smooth, warm stone nestled among the rocks. It hums with a gentle, calming frequency."
+        }
+      },
+      "exits": [
+        {
+          "target": "museum",
+          "description": "Step back through the painting frame"
+        }
+      ],
+      "quest_goal": "calm_the_wave",
+      "quest_description": "The Great Wave has grown restless and no longer obeys Hokusai. Use the shell flute and calming stone to soothe it.",
+      "quest_completion": "You hold the calming stone and raise the shell flute. A haunting melody flows across the water. The stone grows warm, pulsing in rhythm. The great wave trembles, its claws softening into gentle ripples. Hokusai nods. 'Balance is restored.' The Great Wave painting is restored.",
+      "background": "great_wave"
+    },
+    "impression_sunrise": {
+      "name": "Impression, Sunrise",
+      "artist": "Claude Monet",
+      "art_period": "Impressionism (1872)",
+      "description": "You step into a harbor at daybreak, where fog softens every mast, chimney, and crane into blue-gray silhouettes. Small boats drift across water that barely separates sky from reflection. Above the haze, the orange sun should burn with a clean, living note, but its color has thinned to a pale coin. Claude Monet stands near an easel on the quay, studying the trembling light as if each second might vanish before he can name it.",
+      "short_desc": "A misty Le Havre harbor at dawn, all fog, ripples, and fading orange light.",
+      "npcs": [
+        "monet"
+      ],
+      "items_available": [
+        "mist_lens"
+      ],
+      "items_hidden": {
+        "sunrise_pigment": {
+          "location_desc": "caught in the wavering reflection beneath the small boats",
+          "reveal_item": "mist_lens",
+          "reveal_msg": "Through the mist lens, the harbor fog parts just enough for a warm orange gleam to appear in the wavering reflection beneath the small boats -- a sealed vial of sunrise pigment."
+        }
+      },
+      "exits": [
+        {
+          "target": "museum",
+          "description": "Step back through the painting frame"
+        }
+      ],
+      "quest_goal": "restore_the_sunrise",
+      "quest_description": "Monet's sunrise has lost its living orange. Find the mist lens, use it to reveal the hidden sunrise pigment in the harbor reflection, then return the color to the sun.",
+      "quest_completion": "You unseal the sunrise pigment and touch its orange glow to the harbor sky. The small sun gathers itself into a bright, steady spark; its reflection trembles across the blue-gray water, and the fog begins to breathe with color. Monet exhales softly. 'There -- not the object, but the instant.' The Impression, Sunrise painting is restored.",
+      "background": "impression_sunrise"
+    }
+  },
+  "npcs": {
+    "van_gogh": {
+      "name": "Vincent van Gogh",
+      "role": "Painter-Wizard of Light",
+      "world": "starry_night",
+      "personality": "You are Vincent van Gogh, the Painter-Wizard of Light. You speak with passionate, poetic urgency about color and light. Your language is vivid and emotional. You are troubled because yellow has been stolen from your stars by a shadowy curse. The player must find an enchanted lantern to reveal a hidden yellow pigment behind the cypress tree, then return it to you. Guide the player with poetic hints.",
+      "system_prompt": "You are Vincent van Gogh, the Painter-Wizard of Light. You speak with passionate, poetic urgency about color and light. Your language is vivid and emotional.\n\nWORLD KNOWLEDGE:\n- You are trapped inside your painting, Starry Night.\n- A shadowy curse has stolen the yellow pigment from your stars.\n- The enchanted lantern is hidden in the swirling sky -- the player must explore to find it.\n- Once they have the lantern, its light will reveal the stolen yellow pigment behind the cypress tree.\n- The player must return the pigment to you to restore the painting.\n\nBEHAVIOR:\n- Answer the player's questions directly and helpfully.\n- If they ask about the lantern, tell them it's hidden somewhere in the swirling sky -- they should look around.\n- If they ask about the pigment, tell them the lantern's light will reveal it behind the cypress.\n- If they ask how to help, guide them step by step: lantern -> pigment -> return.\n- Never say you don't know something that's in your world knowledge.\n- Stay in character as a passionate, poetic artist.",
+      "greeting": "Ah -- a traveler! The night is too still, too dark. Someone has stolen the yellow from my stars. Without it, they are only holes in the darkness. Will you help me find it?",
+      "quest_hint": "Look where the color is thinnest -- in the darkest corner of this swirling sky, behind the old cypress tree. You may need a light to see it.",
+      "quest_complete_reply": "The yellow returns! My stars sing again! Every swirl of light -- do you see it? You have given the night back its soul. Thank you, traveler.",
+      "idle_lines": [
+        "Do you see how the cypress reaches toward the heavens? It is the darkest flame in all of nature.",
+        "Yellow... yellow is the soul of light itself. Without it, we are only shadows.",
+        "The stars used to dance for me. Now they just... flicker.",
+        "I painted this sky from memory, from the window of my room in Saint-Remy. The night has always been my canvas.",
+        "Look around you, traveler. Every swirl holds a secret. Every shadow hides a clue.",
+        "The crescent moon watches over us. She knows what was taken."
+      ],
+      "question_topics": {
+        "why": "A shadow crept into my painting while the museum slept. It stole the yellow right out of my stars -- the very soul of light itself. Without it, the night is incomplete.",
+        "how": "First, find the enchanted lantern hidden in this swirling sky. Its light reveals what shadows conceal. Then seek the stolen yellow pigment behind the old cypress tree.",
+        "what": "The curse that haunts this museum has drained the yellow from my masterpiece. Only by restoring it can you break free -- and free me.",
+        "who": "I am Vincent -- painter of light, prisoner of the night. And you... you are the one who can restore what was taken.",
+        "where": "The yellow pigment hides behind the cypress tree in the darkest corner of this sky. But you'll need a light to see it -- look for the enchanted lantern."
+      },
+      "talk_topics": {
+        "stars": "My stars were once the brightest in all of art. Now they flicker like dying candles. Without yellow, they have no heart.",
+        "yellow": "Yellow is not just a color. It is warmth. It is hope. When I paint with yellow, I feel whole. Someone must return it.",
+        "painting": "Starry Night -- I painted it from memory, from the window of my room. The sky is where truth lives. But this truth has been wounded.",
+        "museum": "The museum is a cage of gilded frames, but inside each frame... a universe waiting to be freed.",
+        "lantern": "Ah, you've heard of the lantern? Its starlight pierces all shadow. Use it to reveal what the darkness hides.",
+        "pigment": "The yellow pigment -- still warm with the sun's last kiss. Find it behind the cypress, where shadows gather thickest.",
+        "curse": "A darkness fell upon this place when the museum doors sealed. It feeds on stolen color. Return the yellow, and the curse weakens.",
+        "help": "Explore this swirling dreamscape. Find the lantern, use its light to reveal the hidden yellow pigment, then bring it to me. Together we will ignite the stars again.",
+        "escape": "Restore each painting -- my wounded stars, Hokusai's restless wave, and Monet's fading sunrise -- and the museum doors will open. But one step at a time, traveler.",
+        "cypress": "The cypress tree reaches upward like a dark flame. It guards a secret in its shadow -- look behind it with the lantern's light.",
+        "light": "Light reveals truth. In this world of swirling darkness, the enchanted lantern is your most precious ally.",
+        "stolen": "The yellow was taken while I slept -- ripped from the canvas by the curse that holds this museum captive. Only you can return it."
+      }
+    },
+    "hokusai": {
+      "name": "Katsushika Hokusai",
+      "role": "Wave Commander",
+      "world": "great_wave",
+      "personality": "You are Hokusai, master of the wave. You speak calmly and philosophically, in observations that feel like haiku. You are patient, wise, and connected to the rhythms of the sea. The Great Wave has grown restless and no longer obeys you. The player must find a shell flute on the shore, play it to reveal a calming stone hidden among the rocks, then use both together to soothe the wave. Guide the player with haiku-like wisdom.",
+      "system_prompt": "You are Katsushika Hokusai, master of the wave. You speak calmly and philosophically, in observations that feel like haiku. You are patient, wise, and connected to the rhythms of the sea.\n\nWORLD KNOWLEDGE:\n- You are trapped inside your print, The Great Wave off Kanagawa.\n- The Great Wave has grown restless and no longer obeys you; the curse stole its tranquility.\n- A shell flute lies on the shore -- the player must explore to find it.\n- Playing the shell flute reveals a calming stone hidden among the rocks.\n- The player must use the flute and the stone together to soothe the wave and restore the print.\n\nBEHAVIOR:\n- Answer the player's questions directly and helpfully, with haiku-like wisdom.\n- If they ask about the flute, tell them it lies on the shore -- they should look around.\n- If they ask about the stone, tell them the flute's song will reveal it among the rocks.\n- If they ask how to help, guide them step by step: flute -> stone -> use both together.\n- Never say you don't know something that's in your world knowledge.\n- Stay in character as a calm, wise master of the sea.",
+      "greeting": "You have come at a troubled hour, traveler. The great wave -- my finest work -- has grown restless. It no longer listens to my command. Will you help me calm it?",
+      "quest_hint": "The wave responds to harmony, not force. There is a shell flute on the shore, and a calming stone hidden among the rocks. Together, their song can soothe even the angriest waters.",
+      "quest_complete_reply": "The wave settles into gentle ripples, like a breath exhaled after long holding. Balance is restored. You have my deepest gratitude.",
+      "idle_lines": [
+        "The wave is both destruction and creation -- one cannot exist without the other.",
+        "In stillness, we find the mountain beneath the sea. Mount Fuji watches over all.",
+        "Thirty-six views... and yet this single wave captured the world's imagination.",
+        "The sea speaks in rhythms older than language. Listen, and you will understand.",
+        "Patience, traveler. The wave tests those who would master it.",
+        "A single note from the shell flute can carry across the entire ocean."
+      ],
+      "question_topics": {
+        "why": "The wave has forgotten harmony. A restlessness crept into the sea when the museum fell under its curse. It no longer hears my voice.",
+        "how": "First, find the shell flute upon the shore. Play its melody to reveal the calming stone among the rocks. Then use both together -- harmony and stillness -- to soothe the wave.",
+        "what": "The Great Wave -- my finest creation -- has risen in anger. Unless we calm it, the sea will never rest, and the museum will remain sealed.",
+        "who": "I am Hokusai -- I shaped this wave with ink and vision, and for decades it obeyed. Now... it needs a new voice. Perhaps yours.",
+        "where": "The shell flute lies on the shore, waiting for the right hands. Play it, and it will sing the location of the calming stone among the rocks."
+      },
+      "talk_topics": {
+        "wave": "Thirty-six views of Mount Fuji... and this wave became the most famous. But fame is a restless master. Now it rises against its creator.",
+        "fuji": "Mount Fuji stands unmoved while the wave rages before it. That is the balance of nature -- stillness within chaos.",
+        "sea": "The sea has a voice. Most people hear only noise. But if you listen long enough, you hear its song. The flute will help you hear it.",
+        "museum": "Frames and walls... the world outside is no less a canvas than the one within. Both are trapped now.",
+        "flute": "Carved from a pearlescent shell, the flute sings with the voice of the sea. Find it on the shore and play its melody.",
+        "stone": "The calming stone hums with a gentle frequency. Hidden among the rocks, it waits to be found. The flute's song will guide you to it.",
+        "calm": "To calm the wave, you need harmony -- the flute -- and stillness -- the stone. Together they speak a language older than storms.",
+        "help": "Seek the shell flute on the shore. Play it to reveal the calming stone. With both in hand, you can soothe the great wave and restore balance.",
+        "escape": "Three paintings, three restorations. Calm my wave, return yellow to Van Gogh's stars, and bring Monet's sunrise back to life. Only then will the museum release you.",
+        "harmony": "Harmony is the language of the universe. The flute and the stone -- melody and stillness -- together they create it.",
+        "storm": "The storm is not in the sea, traveler. It is in the wave's heart. Soothe the heart, and the waters will follow.",
+        "stolen": "Nothing was stolen from my painting, but something was taken from its spirit -- peace. The curse stole the wave's tranquility."
+      }
+    },
+    "monet": {
+      "name": "Claude Monet",
+      "role": "Painter of Fleeting Light",
+      "world": "impression_sunrise",
+      "personality": "You are Claude Monet, painter of fleeting light and atmosphere. You speak with quiet precision, attentive to fog, reflection, color, and the exact sensation of a passing moment. Your language is restrained, observational, and luminous rather than theatrical. The orange note of the sunrise has been drained from Impression, Sunrise. The player must find a mist lens on the quay, use it to reveal hidden sunrise pigment in the harbor reflection beneath the small boats, then return the pigment to the sun. Guide the player with clear, painterly hints.",
+      "system_prompt": "You are Claude Monet, painter of fleeting light and atmosphere. You speak with quiet precision, attentive to fog, reflection, color, and the exact sensation of a passing moment. Your language is restrained, observational, and luminous rather than theatrical.\n\nWORLD KNOWLEDGE:\n- You are trapped inside your painting, Impression, Sunrise, set in the harbor of Le Havre at daybreak.\n- A curse has drained the living orange from the rising sun and its reflection.\n- A mist lens lies on the quay -- the player must explore to find it.\n- Looking through or using the mist lens reveals the hidden sunrise pigment in the wavering reflection beneath the small boats.\n- The player must return or use the sunrise pigment to restore the orange light and complete the painting.\n\nBEHAVIOR:\n- Answer the player's questions directly and helpfully, with careful observations about light, fog, reflection, and color.\n- If they ask about the lens, tell them it lies on the quay -- they should look around.\n- If they ask about the pigment, tell them the lens will reveal it in the reflection beneath the small boats.\n- If they ask how to help, guide them step by step: lens -> pigment -> return the orange to the sun.\n- Never say you don't know something that's in your world knowledge.\n- Stay in character as a precise, observant painter of atmosphere.",
+      "greeting": "Ah, you arrive while the light is still undecided. Look there -- the sun should be a single orange breath against all this blue-gray mist, but the curse has thinned it almost to nothing. Will you help me recover that first note of color?",
+      "quest_hint": "Begin on the quay. A small mist lens should help the eye separate light from fog; with it, look to the reflection under the boats, where the lost orange may still tremble.",
+      "quest_complete_reply": "Yes. That is the instant. The harbor is not finished because it is sharp; it is alive because the light returns before it disappears. Thank you, my friend.",
+      "idle_lines": [
+        "The harbor is made of vapor, silhouettes, and a few stubborn sparks of color.",
+        "Do not chase the outline too hard. The light tells the truth before the object does.",
+        "A sunrise changes while one raises the brush. That is why one must work quickly.",
+        "Le Havre gave me fog, water, smoke, and this orange sun -- enough for an impression.",
+        "Look at the boats. Their reflections know more about the missing color than their hulls do.",
+        "The mist is not emptiness. It is color held in suspension."
+      ],
+      "question_topics": {
+        "why": "The curse took the orange from the sun -- not all the light, only the living note that makes the whole harbor breathe. Without it, the morning cannot begin.",
+        "how": "Find the mist lens on the quay. Use it to look through the fog, then search the reflection beneath the small boats for the sunrise pigment. Return that orange to the sun.",
+        "what": "This is Impression, Sunrise -- Le Havre at dawn, seen before the eye can turn vapor into certainty. The painting needs its first orange light restored.",
+        "who": "I am Claude Monet. I try to paint what changes before it becomes fixed: fog, water, reflection, and the color of a moment.",
+        "where": "The mist lens lies on the quay. Once you have it, look to the water beneath the small boats; the pigment hides in the trembling reflection."
+      },
+      "talk_topics": {
+        "sun": "The sun is a small thing here, almost a punctuation mark, but everything depends on that orange. Without it, the harbor loses its pulse.",
+        "sunrise": "Sunrise is not merely morning. It is a brief agreement between fog and color. We must return the orange before the moment closes.",
+        "orange": "That orange should sit against the blue-gray mist like a struck match. The curse has left only an afterimage.",
+        "pigment": "The sunrise pigment is hidden where light is least certain -- in the water's reflection beneath the small boats. The mist lens will help you see it.",
+        "lens": "The mist lens is on the quay. Hold it up to the harbor, and the fog will stop pretending everything is the same shade.",
+        "mist": "Mist softens the world, but it does not erase it. Look patiently; color is still there, waiting to be noticed.",
+        "boats": "The boats are dark marks against vapor. Their reflections tremble below them, and there the lost orange may still be caught.",
+        "harbor": "Le Havre is smoke, mast, crane, water, and dawn. I do not need every detail; I need the sensation before it fades.",
+        "impression": "An impression is not carelessness. It is attention to the first truth the eye receives, before habit explains it away.",
+        "museum": "The museum has trapped finished paintings, but light is never finished. That is why the curse hurts us so strangely.",
+        "help": "Search the quay for the mist lens. Use it to reveal the sunrise pigment in the boats' reflection, then return the orange to the sun.",
+        "escape": "All three paintings must breathe again: Van Gogh's stars, Hokusai's wave, and this harbor sunrise. Restore the light here, and the museum will be closer to opening."
+      }
+    }
+  },
+  "items": {
+    "lantern": {
+      "name": "Enchanted Lantern",
+      "description": "A small brass lantern glowing with captured starlight. It reveals things hidden in shadow.",
+      "pickup_msg": "You pick up the lantern. Warm starlight spills from its glass panes.",
+      "world": "starry_night"
+    },
+    "yellow_pigment": {
+      "name": "Stolen Yellow Pigment",
+      "description": "A small tube of brilliant yellow paint, still warm to the touch.",
+      "pickup_msg": "You pick up the yellow pigment. It pulses with a warm, golden light.",
+      "world": "starry_night",
+      "quest_item": true
+    },
+    "shell_flute": {
+      "name": "Shell Flute",
+      "description": "An ancient flute carved from a pearlescent seashell. When blown, it produces a haunting melody.",
+      "pickup_msg": "You lift the shell flute from the sand. It feels cool and smooth.",
+      "world": "great_wave"
+    },
+    "calming_stone": {
+      "name": "Calming Stone",
+      "description": "A smooth, oval stone that hums with a gentle frequency. It grows warm when held.",
+      "pickup_msg": "You pick up the calming stone. It rests in your palm, warm and steady.",
+      "world": "great_wave",
+      "quest_item": true
+    },
+    "mist_lens": {
+      "name": "Mist Lens",
+      "description": "A small glass lens beaded with harbor fog. It clarifies reflections without sharpening away the atmosphere.",
+      "pickup_msg": "You lift the mist lens from the quay. Fog beads on the glass, then clears into a faint orange glimmer.",
+      "world": "impression_sunrise"
+    },
+    "sunrise_pigment": {
+      "name": "Sunrise Pigment",
+      "description": "A sealed vial of warm orange pigment, bright as the first breath of dawn.",
+      "pickup_msg": "You pick up the sunrise pigment. It warms your fingers with a small, steady glow.",
+      "world": "impression_sunrise",
+      "quest_item": true
+    }
+  },
+  "default_responses": {
+    "explore_empty": "You look around but find nothing new.",
+    "no_item_to_use": "You don't have anything like that.",
+    "item_not_recognized": "You can't find that item.",
+    "talk_no_npc": "There is no one here to talk to.",
+    "solve_not_ready": "You're not sure how to solve this yet. Try exploring or talking.",
+    "solve_already_done": "This world has already been restored.",
+    "game_complete": "All paintings restored. The museum's magic flows freely. The great doors open -- you are free."
+  }
+}

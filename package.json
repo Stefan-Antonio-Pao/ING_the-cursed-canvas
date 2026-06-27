@@ -1,0 +1,57 @@
+{
+  "name": "the-cursed-canvas-desktop",
+  "version": "1.0.0",
+  "description": "Desktop build wrapper for The Cursed Canvas.",
+  "main": "desktop/electron/main.js",
+  "private": true,
+  "scripts": {
+    "desktop:dev": "electron .",
+    "backend:build": "python -m PyInstaller cursed-canvas-backend.spec --noconfirm",
+    "desktop:pack": "electron-builder --dir",
+    "desktop:dist": "npm run backend:build && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.cursedcanvas.game",
+    "productName": "The Cursed Canvas",
+    "directories": {
+      "output": "build/desktop-dist"
+    },
+    "files": [
+      "desktop/electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/cursed-canvas-backend",
+        "to": "backend"
+      },
+      {
+        "from": "desktop/electron/config.json",
+        "to": "desktop-config.json"
+      }
+    ],
+    "mac": {
+      "icon": "desktop/assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.games"
+    },
+    "win": {
+      "icon": "desktop/assets/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
