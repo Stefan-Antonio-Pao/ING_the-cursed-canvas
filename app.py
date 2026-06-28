@@ -201,6 +201,13 @@ def _experience_quota_limited():
 
 
 def _experience_api_allowed():
+    if session.get("deepseek_api_mode", "experience") == "experience" and _experience_proxy_url():
+        proxy_status, _ = _experience_proxy_probe(timeout=3)
+        if not proxy_status:
+            session["deepseek_api_mode"] = "personal"
+            session.modified = True
+            return False
+        return True
     return not _experience_quota_limited() or _experience_tokens_remaining() > 0
 
 
@@ -308,14 +315,29 @@ def _experience_proxy_request(path, payload=None, method="POST", timeout=8):
         return {"error": "Experience proxy is unavailable."}
 
 
-def _experience_proxy_status():
+def _experience_proxy_probe(timeout=4):
     proxy_url = _experience_proxy_url()
     if not proxy_url:
-        return None
+        return None, ""
     client_id = _experience_client_id()
     query = f"/api/experience/status?client_id={client_id}"
-    data = _experience_proxy_request(query, payload=None, method="GET", timeout=4)
-    return data if isinstance(data, dict) and not data.get("error") else None
+    data = _experience_proxy_request(query, payload=None, method="GET", timeout=timeout)
+    if isinstance(data, dict) and not data.get("error"):
+        return data, ""
+    if isinstance(data, dict):
+        return None, data.get("error") or "Experience proxy is unavailable."
+    return None, "Experience proxy is unavailable."
+
+
+def _experience_proxy_status():
+    proxy_status, _ = _experience_proxy_probe()
+    return proxy_status
+
+
+def _experience_mode_available(proxy_status=None):
+    if _experience_proxy_url():
+        return bool(proxy_status)
+    return bool(_experience_deepseek_key())
 
 
 def _personal_deepseek_key():
@@ -353,6 +375,14 @@ def _get_deepseek_client_for_current_settings():
         return get_llm_client("api", api_key=api_key)
     proxy_url = _experience_proxy_url()
     if proxy_url:
+        proxy_status, _ = _experience_proxy_probe(timeout=3)
+        if not proxy_status:
+            session["deepseek_api_mode"] = "personal"
+            session.modified = True
+            api_key, _ = _personal_deepseek_key()
+            if not api_key:
+                raise RuntimeError("Experience mode is unavailable; personal DeepSeek API key is required.")
+            return get_llm_client("api", api_key=api_key)
         return get_remote_experience_client(
             proxy_url=proxy_url,
             client_id=_experience_client_id(),
@@ -382,7 +412,13 @@ def _model_status_payload(extra=None):
 def _settings_payload():
     key, source = _personal_deepseek_key()
     payload = _model_status_payload()
-    proxy_status = _experience_proxy_status()
+    proxy_status, proxy_error = _experience_proxy_probe()
+    experience_available = _experience_mode_available(proxy_status)
+    forced_personal = False
+    if session.get("deepseek_api_mode", "experience") == "experience" and not experience_available:
+        session["deepseek_api_mode"] = "personal"
+        session.modified = True
+        forced_personal = True
     if proxy_status:
         remaining_tokens = int(proxy_status.get("remaining_tokens", _experience_tokens_remaining()))
         token_limit = int(proxy_status.get("token_limit", _EXPERIENCE_TOKEN_LIMIT))
@@ -410,6 +446,14 @@ def _settings_payload():
             "experience_unlimited": experience_unlimited,
             "experience_proxy_enabled": bool(_experience_proxy_url()),
             "experience_proxy_available": bool(proxy_status),
+            "experience_available": experience_available,
+            "experience_status": "online" if experience_available else "offline",
+            "experience_status_detail": (
+                "Experience service is online."
+                if experience_available
+                else (proxy_error or "Experience service is not configured.")
+            ),
+            "experience_forced_personal": forced_personal,
         },
     })
     return payload
@@ -1054,6 +1098,13 @@ def settings():
     if api_mode is not None:
         if api_mode not in ("experience", "personal"):
             return jsonify({"error": "Invalid DeepSeek API mode."}), 400
+        if api_mode == "experience":
+            proxy_status, proxy_error = _experience_proxy_probe(timeout=4)
+            if not _experience_mode_available(proxy_status):
+                session["deepseek_api_mode"] = "personal"
+                session.modified = True
+                message = proxy_error or "Experience mode is unavailable. Use a personal DeepSeek API key."
+                return jsonify({"error": message, **_settings_payload()}), 503
         session["deepseek_api_mode"] = api_mode
 
     if isinstance(personal_api_key, str):
@@ -1064,6 +1115,11 @@ def settings():
 
     if isinstance(unlock_key, str) and unlock_key.strip():
         if _experience_proxy_url():
+            proxy_status, proxy_error = _experience_proxy_probe(timeout=4)
+            if not proxy_status:
+                session["deepseek_api_mode"] = "personal"
+                session.modified = True
+                return jsonify({"error": proxy_error or "Experience mode is unavailable."}), 503
             unlock_result = _experience_proxy_request("/api/experience/unlock", {
                 "client_id": _experience_client_id(),
                 "unlock_key": unlock_key.strip(),

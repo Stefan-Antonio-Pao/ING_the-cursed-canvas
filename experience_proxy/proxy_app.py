@@ -14,6 +14,7 @@ import json
 import os
 import secrets
 import sqlite3
+import tempfile
 import time
 
 load_dotenv()
@@ -29,8 +30,21 @@ AUTH_TOKEN = os.getenv("EXPERIENCE_PROXY_AUTH_TOKEN", "")
 MAX_MESSAGE_CHARS = int(os.getenv("EXPERIENCE_PROXY_MAX_MESSAGE_CHARS", "60000"))
 
 
+def _db_path():
+    global DB_PATH
+    parent = os.path.dirname(os.path.abspath(DB_PATH))
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as exc:
+            fallback = os.path.join(tempfile.gettempdir(), os.path.basename(DB_PATH) or "experience_proxy.sqlite3")
+            app.logger.warning("Experience proxy DB path %s is unavailable (%s); using %s", DB_PATH, exc, fallback)
+            DB_PATH = fallback
+    return DB_PATH
+
+
 def _db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
     conn.execute(
         """

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Cursed Canvas</title>
-    <link rel="stylesheet" href="/static/style.css?v=experience-mode-20260627b">
+    <link rel="stylesheet" href="/static/style.css?v=experience-availability-20260628">
 </head>
 <body data-world="museum">
     <!-- Background layers -->
@@ -86,6 +86,11 @@
                             <strong>Experience Mode</strong>
                             <span>Default</span>
                         </div>
+                        <div class="settings-status-row">
+                            <span id="experience-service-dot" class="status-dot loading"></span>
+                            <strong id="experience-service-status">Checking</strong>
+                        </div>
+                        <p class="settings-note" id="experience-service-detail">Checking the remote experience service...</p>
                         <div class="settings-meter-row">
                             <span>Remaining Tokens</span>
                             <strong id="experience-token-percent">100%</strong>
@@ -293,6 +298,6 @@
         </div>
     </div>
 
-    <script src="/static/game.js?v=experience-mode-20260627b"></script>
+    <script src="/static/game.js?v=experience-availability-20260628"></script>
 </body>
 </html>

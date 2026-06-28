@@ -32,6 +32,9 @@ EXPERIENCE_PROXY_AUTH_TOKEN=
 EXPERIENCE_PROXY_DB_PATH=experience_proxy.sqlite3
 ```
 
+On Render Free, leave `EXPERIENCE_PROXY_DB_PATH` as `experience_proxy.sqlite3` or use `/tmp/experience_proxy.sqlite3`.
+Use `/var/data/experience_proxy.sqlite3` only after adding a Render Persistent Disk mounted at `/var/data`.
+
 Start command:
 
 ```bash

@@ -1119,6 +1119,12 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     padding: 9px 12px;
 }
 
+.settings-inline-form input:disabled,
+.settings-action-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
 .settings-checkbox-row {
     display: flex;
     align-items: center;

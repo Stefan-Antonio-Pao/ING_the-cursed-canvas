@@ -51,6 +51,9 @@ const localModelSettingsPanel = document.getElementById("local-model-settings-pa
 const experienceTokenPercent = document.getElementById("experience-token-percent");
 const experienceTokenBar = document.getElementById("experience-token-bar");
 const experienceTokenNote = document.getElementById("experience-token-note");
+const experienceServiceDot = document.getElementById("experience-service-dot");
+const experienceServiceStatus = document.getElementById("experience-service-status");
+const experienceServiceDetail = document.getElementById("experience-service-detail");
 const experienceUnlockInput = document.getElementById("experience-unlock-input");
 const experienceUnlockBtn = document.getElementById("experience-unlock-btn");
 const personalApiToggle = document.getElementById("personal-api-toggle");
@@ -1202,11 +1205,31 @@ function setPersonalApiExpanded(expanded) {
 }
 
 function updateExperienceSettings(deepseek) {
+    const experienceAvailable = Boolean(deepseek.experience_available);
+    if (experienceServiceDot) {
+        experienceServiceDot.classList.remove("online", "loading", "offline");
+        experienceServiceDot.classList.add(experienceAvailable ? "online" : "offline");
+    }
+    if (experienceServiceStatus) {
+        experienceServiceStatus.textContent = experienceAvailable ? "Online" : "Offline";
+    }
+    if (experienceServiceDetail) {
+        experienceServiceDetail.textContent = experienceAvailable
+            ? "The remote experience service is available."
+            : "Experience mode is unavailable. Use a personal DeepSeek API key.";
+        experienceServiceDetail.classList.toggle("warning", !experienceAvailable);
+    }
+    if (experienceUnlockInput) experienceUnlockInput.disabled = !experienceAvailable;
+    if (experienceUnlockBtn) experienceUnlockBtn.disabled = !experienceAvailable;
+
     const percent = clampPercent(deepseek.experience_remaining_percent ?? 100);
     if (experienceTokenPercent) experienceTokenPercent.textContent = `${percent}%`;
     if (experienceTokenBar) experienceTokenBar.style.width = `${percent}%`;
     if (!experienceTokenNote) return;
-    if (deepseek.experience_unlimited) {
+    if (!experienceAvailable) {
+        experienceTokenNote.textContent = deepseek.experience_status_detail || "Experience service is offline.";
+        experienceTokenNote.classList.add("warning");
+    } else if (deepseek.experience_unlimited) {
         experienceTokenNote.textContent = "Experience mode is unlocked for this visit.";
         experienceTokenNote.classList.remove("warning");
     } else {
@@ -1224,7 +1247,7 @@ function updateExperienceSettings(deepseek) {
 function updatePersonalApiSettings(deepseek) {
     if (!personalApiKeyInput || !personalApiHelp) return;
     const maskedKey = deepseek.personal_key_masked || "";
-    setPersonalApiExpanded(deepseek.api_mode === "personal");
+    setPersonalApiExpanded(deepseek.api_mode === "personal" || !deepseek.experience_available);
     personalApiKeyInput.dataset.maskedValue = maskedKey;
     personalApiKeyInput.value = maskedKey;
     personalApiKeyInput.placeholder = deepseek.personal_configured
@@ -1234,6 +1257,9 @@ function updatePersonalApiSettings(deepseek) {
         const source = deepseek.personal_key_source === "environment" ? "environment" : "settings";
         personalApiHelp.textContent = `API key loaded from ${source}. Only the first and last four characters are shown.`;
         personalApiHelp.classList.remove("warning");
+    } else if (!deepseek.experience_available) {
+        personalApiHelp.textContent = "Experience mode is offline. Enter your DeepSeek API Key to use online AI.";
+        personalApiHelp.classList.add("warning");
     } else {
         personalApiHelp.textContent = "No API key is configured. Enter your DeepSeek API Key here.";
         personalApiHelp.classList.add("warning");
@@ -1296,7 +1322,10 @@ async function postSettings(payload) {
         body: JSON.stringify(payload)
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || "Settings update failed");
+    if (!resp.ok) {
+        if (data && data.deepseek) updateSettingsUi(data);
+        throw new Error(data.error || "Settings update failed");
+    }
     updateSettingsUi(data);
     updateModelStatus(data);
     return data;
@@ -1359,6 +1388,12 @@ function closeSettings() {
 
 async function selectDeepSeekApiMode(apiMode) {
     if (settingsBusy) return;
+    if (apiMode === "experience" && settingsData && settingsData.deepseek && !settingsData.deepseek.experience_available) {
+        setPersonalApiExpanded(true);
+        setSettingsStatus("Experience mode is offline. Use a personal API key.", "error");
+        if (personalApiKeyInput) personalApiKeyInput.focus();
+        return;
+    }
     settingsBusy = true;
     try {
         await postSettings({ api_mode: apiMode });
@@ -1630,6 +1665,12 @@ if (personalApiToggle) {
             return;
         }
         setPersonalApiExpanded(false);
+        if (settingsData && settingsData.deepseek && !settingsData.deepseek.experience_available) {
+            setPersonalApiExpanded(true);
+            setSettingsStatus("Experience mode is offline. Personal API is required.", "error");
+            if (personalApiKeyInput) personalApiKeyInput.focus();
+            return;
+        }
         selectDeepSeekApiMode("experience");
     });
 }
