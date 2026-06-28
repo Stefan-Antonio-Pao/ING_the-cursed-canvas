@@ -43,15 +43,48 @@ function loadConfig() {
   };
 }
 
-function backendExecutablePath() {
+function backendExecutableName() {
+  return process.platform === "win32" ? "cursed-canvas-backend.exe" : "cursed-canvas-backend";
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths.filter(Boolean).map((item) => path.normalize(item)))];
+}
+
+function backendExecutableCandidates() {
+  const name = backendExecutableName();
   if (app.isPackaged) {
-    const name = process.platform === "win32" ? "cursed-canvas-backend.exe" : "cursed-canvas-backend";
-    return path.join(process.resourcesPath, "backend", name);
+    const exeDir = path.dirname(process.execPath);
+    const resourceRoots = uniquePaths([
+      process.resourcesPath,
+      path.join(exeDir, "resources"),
+      exeDir,
+      process.cwd(),
+      path.join(process.resourcesPath || "", "resources")
+    ]);
+    const candidates = [];
+    resourceRoots.forEach((root) => {
+      candidates.push(path.join(root, "backend", name));
+      candidates.push(path.join(root, "backend", "cursed-canvas-backend", name));
+      candidates.push(path.join(root, name));
+    });
+    return uniquePaths(candidates);
   }
   const python = process.platform === "win32"
     ? path.join(process.cwd(), "venv", "Scripts", "python.exe")
     : path.join(process.cwd(), "venv", "bin", "python");
-  return fs.existsSync(python) ? python : "python3";
+  return [fs.existsSync(python) ? python : "python3"];
+}
+
+function backendExecutablePath() {
+  const candidates = backendExecutableCandidates();
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+}
+
+function formatBackendCandidates() {
+  return backendExecutableCandidates()
+    .map((candidate) => `${fs.existsSync(candidate) ? "[found]" : "[missing]"} ${candidate}`)
+    .join("\n");
 }
 
 function backendArgs() {
@@ -123,11 +156,12 @@ async function startBackend(config) {
     appendLog(`resourcesPath=${process.resourcesPath || ""}`);
     appendLog(`backendExecutable=${executable}`);
     appendLog(`backendExists=${fs.existsSync(executable)}`);
+    appendLog(`backendCandidates=\n${formatBackendCandidates()}`);
     appendLog(`cwd=${process.cwd()}`);
     appendLog(`port=${port}`);
     appendLog(`experienceProxyUrl=${env.EXPERIENCE_PROXY_URL || ""}`);
     if (!fs.existsSync(executable)) {
-      reject(new Error(`Backend executable was not found: ${executable}. Log: ${logPath()}`));
+      reject(new Error(`Backend executable was not found. Log: ${logPath()}`));
       return;
     }
     backendProcess = spawn(executable, backendArgs(), {
