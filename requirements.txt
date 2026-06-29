@@ -10,3 +10,4 @@ numpy==2.2.0
 openai>=1.30.0
 python-dotenv>=1.0.0
 pyinstaller>=6.11.1
+snownlp>=0.12.3

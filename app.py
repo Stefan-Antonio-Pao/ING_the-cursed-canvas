@@ -6,7 +6,7 @@ Priority cascade:
   Tier 3: ML classifier (last resort)
 """
 
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, g
 import sys
 import re
 from dotenv import load_dotenv
@@ -14,11 +14,15 @@ load_dotenv()
 
 import os, json, secrets, logging, threading, time, atexit, socket
 from engine.story_engine import GameState
-from engine.world_data import load_world_data, get_world, get_npc
+from engine.world_data import load_world_data, get_world, get_npc, get_world_name, get_item_name
 from ai.intent import IntentClassifier
 from ai.sentiment import analyze_sentiment
 from ai.dm_prompt import build_dm_prompt, parse_dm_response
 from ai.llm import get_llm_client, get_remote_experience_client, track_deepseek_usage
+from i18n.loader import (
+    resolve_language, get_supported_languages, get_ui_strings,
+    get_keywords, get_move_world_keywords, LANG_FALLBACK,
+)
 import urllib.error
 import urllib.request
 
@@ -29,7 +33,8 @@ app.secret_key = secrets.token_hex(32)
 
 # --- Model state ---
 _llm = None
-_classifier = None
+_classifier_en = None
+_classifier_zh = None
 _classifier_ready = False
 _llm_ready = False
 _llm_loading = False
@@ -44,16 +49,34 @@ _API_FAIL_THRESHOLD = 2  # after N consecutive failures, mark broken
 _API_COOLDOWN_SECONDS = 30  # skip API for this long after marked broken
 
 def _init_classifier():
-    """Load the lightweight ML classifier (sub-second, no network)."""
-    global _classifier, _classifier_ready
+    """Load the lightweight ML classifiers (sub-second, no network)."""
+    global _classifier_en, _classifier_zh, _classifier_ready
     try:
-        _classifier = IntentClassifier()
-        _classifier.load()
-        _classifier_ready = True
-        logger.info("Intent classifier loaded.")
+        _classifier_en = IntentClassifier(lang="en")
+        _classifier_en.load()
+        logger.info("English intent classifier loaded.")
     except FileNotFoundError:
-        logger.warning("No classifier found. Run 'python -m ai.intent' first.")
-        _classifier_ready = True  # game works without it
+        logger.warning("No English classifier found. Run 'python -m ai.intent en' first.")
+    try:
+        _classifier_zh = IntentClassifier(lang="zh")
+        _classifier_zh.load()
+        logger.info("Chinese intent classifier loaded.")
+    except FileNotFoundError:
+        logger.warning("No Chinese classifier found. Run 'python -m ai.intent zh' to train.")
+    _classifier_ready = True
+
+
+def _get_classifier(lang="en"):
+    if lang == "zh" and _classifier_zh:
+        return _classifier_zh
+    return _classifier_en
+
+
+def _current_lang():
+    try:
+        return getattr(g, "lang", "en")
+    except RuntimeError:
+        return "en"
 
 def _ensure_llm():
     """Lazy-load Phi-3-mini (heavy). Called when switching to local mode."""
@@ -431,9 +454,9 @@ def _settings_payload():
         experience_unlimited = bool(session.get("experience_unlocked"))
     payload.update({
         "language": {
-            "current": session.get("settings_language", "en"),
-            "available": ["en"],
-            "switching_available": False,
+            "current": g.lang if hasattr(g, "lang") else session.get("lang", "en"),
+            "available": get_supported_languages(),
+            "switching_available": True,
         },
         "deepseek": {
             "api_mode": session.get("deepseek_api_mode", "experience"),
@@ -538,13 +561,37 @@ def _normalize_save_record(record):
         return None
 
     gs = _restore_state(state)
+    version = record.get("version", 1)
+
     saved_at = record.get("savedAt")
     if not isinstance(saved_at, str) or not saved_at:
         saved_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    if version < 2:
+        lang = record.get("lang", "en")
+        summary = record.get("summary") or _state_summary(gs, lang)
+        if "location_name" not in summary:
+            summary["location_name"] = get_world_name(summary.get("location_id", "museum"), lang)
+        if "inventory_ids" not in summary:
+            summary["inventory_ids"] = list(state.get("inventory", []))
+        if "quests_completed_count" not in summary and "quests_completed" in summary:
+            quests = summary.get("quests_completed_ids", {})
+            if isinstance(quests, dict):
+                summary["quests_completed_count"] = sum(1 for v in quests.values() if v)
+            else:
+                summary["quests_completed_count"] = summary.get("quests_completed", 0)
+        return {
+            "version": 2,
+            "lang": lang,
+            "savedAt": saved_at,
+            "summary": summary,
+            "state": _serialize_state(gs),
+        }
     return {
-        "version": 1,
+        "version": 2,
+        "lang": record.get("lang", "en"),
         "savedAt": saved_at,
-        "summary": _state_summary(gs),
+        "summary": record.get("summary") or _state_summary(gs, "en"),
         "state": _serialize_state(gs),
     }
 
@@ -579,7 +626,7 @@ def _write_save_slots(slots):
     for idx in range(_SAVE_SLOT_COUNT):
         normalized[idx] = _normalize_save_record(slots[idx]) if idx < len(slots) and slots[idx] else None
 
-    payload = {"version": 1, "slots": normalized}
+    payload = {"version": 2, "slots": normalized}
     save_dir = os.path.dirname(_SAVE_FILE_PATH)
     os.makedirs(save_dir, exist_ok=True)
     tmp_path = f"{_SAVE_FILE_PATH}.tmp"
@@ -601,10 +648,12 @@ def _slot_index_from_request(slot_index):
 
 
 def _save_record_from_state(gs):
+    lang = _current_lang()
     return {
-        "version": 1,
+        "version": 2,
+        "lang": lang,
         "savedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "summary": _state_summary(gs),
+        "summary": _state_summary(gs, lang),
         "state": _serialize_state(gs),
     }
 
@@ -619,6 +668,8 @@ def _classify_keyword_fallback(command, game_state=None):
     When game_state is provided and an NPC is present, conversational
     commands default to 'talk' instead of other intents.
     """
+    lang = _current_lang()
+    rules = get_keywords(lang)
     cmd = command.lower()
     words = cmd.split()
     npc_present = False
@@ -628,104 +679,54 @@ def _classify_keyword_fallback(command, game_state=None):
         if world and world.get("npcs"):
             npc_present = True
 
-    # Inventory check (exact short commands)
-    if cmd in ["i", "inv", "inventory", "items"]:
+    if cmd in rules["inventory_exact"]:
+        return "inventory"
+    if any(phrase in cmd for phrase in rules["inventory"]):
         return "inventory"
 
-    # Help keywords — only explicit help-seeking phrases
-    # Uses whole-word matching to avoid false positives (e.g. "lost" in "why you lost your yellow?")
-    _help_phrases = ["help", "hint", "stuck", "guide",
-                     "objective", "goal", "what do i do",
-                     "what should i do", "what now", "what next",
-                     "how do i play", "how do i win"]
-    if cmd in _help_phrases or any(cmd.startswith(p + " ") for p in _help_phrases):
+    help_phrases = rules["help_exact"]
+    if cmd in help_phrases or any(cmd.startswith(p + " ") or cmd.startswith(p + "？") for p in help_phrases):
         return "help"
 
-    # Move keywords (strong directional verbs)
-    _move_verbs = ["go to", "move to", "enter", "step into", "return to",
-                   "leave", "exit", "head to", "visit", "travel to",
-                   "walk into", "go into", "go back"]
-    if any(v in cmd for v in _move_verbs):
+    if any(v in cmd for v in rules["move_verbs"]):
         return "move"
 
-    # Use/interact with items
-    _item_verbs = ["use", "apply", "equip", "wield", "give", "offer",
-                   "show", "play", "blow", "pick up", "grab", "take",
-                   "collect", "examine", "inspect", "look at"]
-    if any(v in cmd for v in _item_verbs):
+    if any(v in cmd for v in rules["item_verbs"]):
         return "use_item"
 
-    # Solve / quest completion
-    if any(w in cmd for w in ["solve", "restore", "fix", "calm", "soothe",
-                               "complete", "return the", "bring back", "escape"]):
+    if any(w in cmd for w in rules["solve_keywords"]):
         return "solve"
 
-    # Talk to NPC (explicit talk verbs)
-    _talk_starters = ["talk", "speak", "ask", "say", "tell", "greet", "chat",
-                      "question", "who are you"]
-    if any(w in cmd for w in _talk_starters):
+    if any(w in cmd for w in rules["talk_starters"]):
+        return "talk"
+    if any(cmd.startswith(w) for w in rules["question_words"]):
         return "talk"
 
-    # Question-starting commands are usually talk
-    _question_words = ["where", "what", "why", "how", "who", "when", "which",
-                       "can you", "could you", "would you", "do you", "does",
-                       "tell me", "is there", "are there"]
-    if any(cmd.startswith(w) for w in _question_words):
-        return "talk"
-
-    # World keywords without move verbs still suggest movement
-    # BUT: skip this check when an NPC is present — the player is probably
-    # talking to the NPC about the world, not trying to travel.
-    _world_kw = ["starry", "night", "stars", "swirling", "van gogh",
-                 "wave", "kanagawa", "hokusai", "sea", "ocean",
-                 "impression", "sunrise", "monet", "harbor", "havre",
-                 "museum", "gallery"]
-    if not npc_present and any(kw in cmd for kw in _world_kw):
+    if not npc_present and any(kw in cmd for kw in rules["world_keywords"]):
         return "move"
 
-    # Look around / explore
-    if any(w in cmd for w in ["look", "explore", "look around", "search",
-                               "investigate", "observe"]):
+    if any(w in cmd for w in rules["explore_words"]):
         return "explore"
 
-    # CONTEXT-AWARE TALK FALLBACK: If an NPC is present and the command looks
-    # conversational (5+ words, no action verb), treat it as talk.
-    # This catches "why you lost your yellow?" and similar natural language.
     if npc_present:
-        _action_verbs = ["go", "move", "enter", "use", "pick", "take", "give",
-                         "solve", "restore", "look", "explore", "search",
-                         "inventory", "help", "exit", "leave", "return",
-                         "grab", "collect", "examine", "inspect", "play",
-                         "blow", "show", "offer", "apply", "equip", "wield",
-                         "calm", "soothe", "fix", "complete", "investigate",
-                         "observe", "step", "walk", "head", "visit", "travel"]
         first_word = words[0] if words else ""
-        has_action = first_word in _action_verbs
-        if not has_action and len(words) >= 5:
+        if first_word not in rules["action_verbs"] and len(words) >= 4:
             return "talk"
 
-    # AGGRESSIVE TALK FALLBACK (no NPC needed): very long conversational sentences
-    # are almost certainly directed at someone, not game commands.
-    _action_verbs = ["go", "move", "enter", "use", "pick", "take", "give",
-                     "solve", "restore", "look", "explore", "search",
-                     "inventory", "help", "exit", "leave", "return",
-                     "grab", "collect", "examine", "inspect", "play",
-                     "blow", "show", "offer", "apply", "equip", "wield",
-                     "calm", "soothe", "fix", "complete", "investigate",
-                     "observe", "step", "walk", "head", "visit", "travel"]
     first_word = words[0] if words else ""
-    has_action = first_word in _action_verbs
-    if not has_action and len(words) >= 8:
+    if first_word not in rules["action_verbs"] and len(words) >= 8:
         return "talk"
 
-    return None  # No keyword match -> caller falls through to Tier 3
+    return None
 
 
 def _classify_ml_fallback(command):
     """ML classifier last resort. Returns intent or 'explore' on failure."""
-    if _classifier:
+    lang = _current_lang()
+    clf = _get_classifier(lang)
+    if clf:
         try:
-            return _classifier.predict(command)
+            return clf.predict(command)
         except Exception:
             pass
     return "explore"
@@ -770,20 +771,27 @@ def _extract_move_target_from_command(command, world, require_move_verb=False):
     """
     if not world:
         return None
+    lang = _current_lang()
+    move_kw = get_move_world_keywords(lang)
     cmd_lower = command.lower()
-    if require_move_verb and not _has_explicit_move_verb(cmd_lower):
-        return None
+    if require_move_verb:
+        rules = get_keywords(lang)
+        if not any(v in cmd_lower for v in rules["move_verbs"]):
+            return None
     for ex in (world.get("exits") or []):
         target = ex["target"]
+        keywords = move_kw.get(target, [])
+        if any(kw in cmd_lower for kw in keywords):
+            return target
         target_world = get_world(target)
         if not target_world:
             continue
         target_name = target_world["name"].lower()
-        target_artist = target_world.get("artist", "").lower()
         target_id = target.lower()
         target_spaced = target_id.replace("_", " ")
         if target_name in cmd_lower or target_id in cmd_lower or target_spaced in cmd_lower:
             return target
+        target_artist = target_world.get("artist", "").lower()
         if target_artist and target_artist in cmd_lower:
             return target
         if target_artist:
@@ -823,6 +831,26 @@ def _parse_player_input(raw_command):
 
 
 # ------------------------------------------------------------------ #
+# Language detection
+# ------------------------------------------------------------------ #
+
+@app.before_request
+def detect_language():
+    lang = None
+    if request.method == "POST" and request.is_json:
+        data = request.get_json(silent=True)
+        if data:
+            lang = data.get("lang")
+    session_lang = session.get("lang")
+    accept = request.headers.get("Accept-Language", "")
+    g.lang = resolve_language(
+        request_lang=lang,
+        session_lang=session_lang,
+        accept_header=accept,
+    )
+
+
+# ------------------------------------------------------------------ #
 # Routes
 # ------------------------------------------------------------------ #
 
@@ -852,6 +880,9 @@ def handle_command():
     command, input_mode = _parse_player_input(raw_command)
     if not command:
         return jsonify({"error": "Empty command"}), 400
+
+    # Preserve original input for transcript (with parentheses for actions)
+    display_command = f"({command})" if (input_mode == "action" and raw_command != command) else raw_command
 
     world = get_world(gs.current_world)
     npc_present = bool(world and world.get("npcs"))
@@ -930,6 +961,15 @@ def handle_command():
                                     )
                                 dm_result["intent"] = "move"
                                 dm_result["move_target"] = forced_target
+                        elif kw_intent in ("use_item", "inventory", "help", "solve"):
+                            if dm_result.get("intent") != kw_intent:
+                                logger.info(
+                                    "Overriding DM intent for explicit action command: '%s' -> %s",
+                                    command,
+                                    kw_intent,
+                                )
+                            dm_result["intent"] = kw_intent
+                            dm_result["move_target"] = None
 
                     if force_talk:
                         dm_result["intent"] = "talk"
@@ -949,7 +989,7 @@ def handle_command():
                             dm_result["move_target"] = None
                             logger.info(f"Overriding invalid move to explore: '{command}' (target='{mt}', valid={valid_exits})")
                     
-                    dm_result["player_command"] = command
+                    dm_result["player_command"] = display_command
                     response = gs.process_dm_response(dm_result)
                     logger.info(f"DM mode ({mode}): intent={dm_result.get('intent')}")
                     if mode == "api":
@@ -986,14 +1026,14 @@ def handle_command():
             if ai_llm_uses_api:
                 try:
                     result = _run_with_experience_quota(
-                        lambda: gs.process(intent="talk", command=command,
+                        lambda: gs.process(intent="talk", command=display_command,
                                            ai_llm=ai_llm, sentiment=analyze_sentiment)
                     )
                 except _ExperienceQuotaExhausted:
-                    result = gs.process(intent="talk", command=command,
+                    result = gs.process(intent="talk", command=display_command,
                                         ai_llm=None, sentiment=analyze_sentiment)
             else:
-                result = gs.process(intent="talk", command=command,
+                result = gs.process(intent="talk", command=display_command,
                                     ai_llm=ai_llm, sentiment=analyze_sentiment)
             result["response_type"] = "keyword"
             response = result
@@ -1023,14 +1063,14 @@ def handle_command():
                 if ai_llm_uses_api:
                     try:
                         result = _run_with_experience_quota(
-                            lambda: gs.process(intent=intent, command=command,
+                            lambda: gs.process(intent=intent, command=display_command,
                                                ai_llm=ai_llm, sentiment=analyze_sentiment)
                         )
                     except _ExperienceQuotaExhausted:
-                        result = gs.process(intent=intent, command=command,
+                        result = gs.process(intent=intent, command=display_command,
                                             ai_llm=None, sentiment=analyze_sentiment)
                 else:
-                    result = gs.process(intent=intent, command=command,
+                    result = gs.process(intent=intent, command=display_command,
                                         ai_llm=ai_llm, sentiment=analyze_sentiment)
                 result["response_type"] = "keyword"
                 response = result
@@ -1043,7 +1083,7 @@ def handle_command():
         if intent == "move":
             intent = _validate_move_intent(command, intent, world)
         logger.info(f"ML classifier fallback: '{command}' -> {intent}")
-        result = gs.process(intent=intent, command=command,
+        result = gs.process(intent=intent, command=display_command,
                             ai_llm=None, sentiment=analyze_sentiment)
         result["response_type"] = "classifier"
         response = result
@@ -1091,9 +1131,11 @@ def settings():
     unlock_key = data.get("unlock_key")
 
     if language is not None:
-        if language != "en":
-            return jsonify({"error": "Language switching is not available yet."}), 400
-        session["settings_language"] = "en"
+        if language not in get_supported_languages():
+            return jsonify({"error": f"Language '{language}' is not yet available."}), 400
+        session["lang"] = language
+        session["settings_language"] = language
+        g.lang = language
 
     if api_mode is not None:
         if api_mode not in ("experience", "personal"):
@@ -1158,6 +1200,7 @@ def reset_game():
         "experience_tokens_used": session.get("experience_tokens_used"),
         "experience_unlocked": session.get("experience_unlocked"),
         "settings_language": session.get("settings_language"),
+        "lang": session.get("lang"),
     }
     _delete_session_game_state()
     session.clear()
@@ -1295,6 +1338,35 @@ def migrate_browser_save_slots():
     })
 
 
+@app.route("/api/i18n/<lang>", methods=["GET"])
+def get_i18n_strings(lang):
+    if lang not in get_supported_languages():
+        return jsonify({"error": f"Language '{lang}' not supported."}), 404
+    return jsonify(get_ui_strings(lang))
+
+
+@app.route("/api/language", methods=["POST"])
+def set_language():
+    data = request.get_json(force=True)
+    lang = data.get("language", "en")
+    if lang not in get_supported_languages():
+        return jsonify({"error": f"Language '{lang}' is not yet available."}), 400
+    session["lang"] = lang
+    session["settings_language"] = lang
+    g.lang = lang
+    payload = {
+        "language": lang,
+        "available": get_supported_languages(),
+    }
+    gs = _load_session_game_state()
+    if gs:
+        ui_state = _build_ui_state_snapshot(gs)
+        ui_state.pop("response_type", None)
+        ui_state["intent"] = "language"
+        payload["ui_state"] = ui_state
+    return jsonify(payload)
+
+
 @app.route("/api/status", methods=["GET"])
 def status():
     gs = _load_session_game_state()
@@ -1307,11 +1379,11 @@ def status():
 # Gallery data routes
 # ------------------------------------------------------------------ #
 
-_GALLERY_SUPPLEMENT = {
+_GALLERY_SUPPLEMENT_EN = {
     "starry_night": {
         "order": 10,
-        "image": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg?width=1200",
-        "image_alt": "The Starry Night by Vincent van Gogh, with a blue swirling night sky, bright stars, a crescent moon, a cypress tree, and a village below.",
+        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
+        "image_alt": "The Starry Night by Vincent van Gogh",
         "image_credit": "Public domain image via Wikimedia Commons",
         "artwork_intro": [
             "Painted in 1889, The Starry Night turns the night sky into motion: stars burn like living suns, the cypress rises like a dark flame, and the village below feels almost silent enough to hear.",
@@ -1328,8 +1400,8 @@ _GALLERY_SUPPLEMENT = {
     },
     "great_wave": {
         "order": 20,
-        "image": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Tsunami_by_hokusai_19th_century.jpg?width=1200",
-        "image_alt": "The Great Wave off Kanagawa by Katsushika Hokusai, with a huge curling blue wave, boats, and Mount Fuji in the distance.",
+        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Great_Wave_off_Kanagawa2.jpg/1280px-Great_Wave_off_Kanagawa2.jpg",
+        "image_alt": "The Great Wave off Kanagawa by Katsushika Hokusai",
         "image_credit": "Public domain image via Wikimedia Commons",
         "artwork_intro": [
             "The Great Wave off Kanagawa was created around 1831 as part of Hokusai's Thirty-six Views of Mount Fuji. Its force comes from contrast: a towering wave, fragile boats, and a distant mountain that remains impossibly calm.",
@@ -1346,8 +1418,8 @@ _GALLERY_SUPPLEMENT = {
     },
     "impression_sunrise": {
         "order": 30,
-        "image": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Monet_-_Impression%2C_Sunrise.jpg?width=1200",
-        "image_alt": "Impression, Sunrise by Claude Monet, showing a misty harbor at dawn with boats, blue-gray fog, and a small orange sun.",
+        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/Claude_Monet%2C_Impression%2C_soleil_levant.jpg/1280px-Claude_Monet%2C_Impression%2C_soleil_levant.jpg",
+        "image_alt": "Impression, Sunrise by Claude Monet",
         "image_credit": "Public domain image via Wikimedia Commons",
         "artwork_intro": [
             "Painted in 1872, Impression, Sunrise shows the port of Le Havre as fog, water, smoke, and one small orange sun. Its loose handling helped give Impressionism its name.",
@@ -1364,6 +1436,62 @@ _GALLERY_SUPPLEMENT = {
     }
 }
 
+_GALLERY_SUPPLEMENT_ZH = {
+    "starry_night": {
+        "order": 10,
+        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
+        "image_alt": "文森特·梵高《星月夜》",
+        "image_credit": "Public domain image via Wikimedia Commons",
+        "artwork_intro": [
+            "《星月夜》创作于1889年，将夜空化为动势：星星如活的太阳般燃烧，丝柏树如一道黑色火焰般升起，而下方村庄的静谧几乎可以被听见。",
+            "这件作品属于后印象派，但它也像是一个私密的天气系统。梵高并非简单地记录他所见之物；他将记忆、情感和观察塑造成一片似乎仍在移动的天空。"
+        ],
+        "artist_intro": [
+            "文森特·梵高是一位荷兰画家，他短暂的职业生涯改变了现代艺术。他的色彩、笔触和情感强度使平凡的风景充满了内心生命。",
+            "在游戏中，他以光线画家巫师的身份出现：急迫、受伤、并对赋予他星星灵魂的黄色怀着强烈的执念。"
+        ],
+        "journey_story": [
+            "你与梵高的旅程始于一片失去了最亮音符的天空之内。星星仍在，但它们的温暖已被诅咒盗走。",
+            "你在这片梦境中搜寻，找到了魔法灯笼，用它的光芒揭示了丝柏树后隐藏的黄色颜料。当你把那颜色归还给梵高时，夜晚重拾了它的声音，第一个画框开始愈合。"
+        ]
+    },
+    "great_wave": {
+        "order": 20,
+        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Great_Wave_off_Kanagawa2.jpg/1280px-Great_Wave_off_Kanagawa2.jpg",
+        "image_alt": "葛饰北斋《神奈川冲浪里》",
+        "image_credit": "Public domain image via Wikimedia Commons",
+        "artwork_intro": [
+            "《神奈川冲浪里》约于1831年创作，是北斋《富岳三十六景》系列的一部分。它的力量来自对比：一道高耸的巨浪、脆弱的小船，以及远处那座不可思议地保持平静的山。",
+            "作为木版画，它被制作成可以在人与人之间传递的作品。这种可复制的特质帮助这道海浪成为世界艺术中最具辨识度的图像之一。"
+        ],
+        "artist_intro": [
+            "葛饰北斋是一位日本浮世绘大师，在漫长的工作生涯中不断改变自己的名字、风格和抱负。他的线条让运动感觉精确、严谨且充满生命力。",
+            "在游戏中，北斋化身为海浪之主：足够平静以聆听大海，却无法指挥一道平衡已被夺走的海浪。"
+        ],
+        "journey_story": [
+            "你与北斋的旅程始于一道已忘记和谐的海浪之下的船上。危险不是靠力量解决的；它需要的是节奏与静默。",
+            "你找到了海螺笛，揭示了安宁石，将两者结合。海浪柔化，富士山守望，版画记起了动静之间的平衡。"
+        ]
+    },
+    "impression_sunrise": {
+        "order": 30,
+        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/Claude_Monet%2C_Impression%2C_soleil_levant.jpg/1280px-Claude_Monet%2C_Impression%2C_soleil_levant.jpg",
+        "image_alt": "克劳德·莫奈《印象·日出》",
+        "image_credit": "Public domain image via Wikimedia Commons",
+        "artwork_intro": [
+            "《印象·日出》创作于1872年，将勒阿弗尔港呈现为雾、水、烟尘和一轮小小的橙色太阳。它松散的笔法帮助印象派得名。",
+            "这幅画对硬轮廓的兴趣不如对稍纵即逝瞬间的感觉：光芒触及水面，在眼睛能将一切确定之前。"
+        ],
+        "artist_intro": [
+            "克劳德·莫奈是一位法国画家，印象派的核心人物。他一次又一次地回归到变化的光线、天气、倒影和颜色随时间变化的方式。",
+            "在游戏中，莫奈是稍纵即逝的光线画家：精准、耐心，并深深意识到一抹缺失的颜色可以让整个清晨无法开始。"
+        ],
+        "journey_story": [
+            "你与莫奈的旅程始于一个黎明已稀薄成一枚苍白硬币的港口。太阳仍在，但它的橙色呼吸已被抽干。",
+            "你在码头上找到了雾透镜，用它分开光线与雾霭，从小船下方的倒影中找回了日出颜料。当颜料归还时，港口并未变得更清晰；它变得鲜活起来。"
+        ]
+    }
+}
 
 def _gallery_world_order(world_data):
     museum = world_data.get("worlds", {}).get("museum", {})
@@ -1387,6 +1515,7 @@ def _build_gallery_artworks():
     image, image_alt, image_credit, artwork_intro, artist_intro, journey_story,
     order, or visible fields. Nothing about this hook is shown in the UI.
     """
+    lang = _current_lang()
     world_data = load_world_data()
     worlds = world_data.get("worlds", {})
     artworks = []
@@ -1396,7 +1525,8 @@ def _build_gallery_artworks():
         if not world or not world.get("artist"):
             continue
 
-        configured = dict(_GALLERY_SUPPLEMENT.get(world_id, {}))
+        base_supplement = _GALLERY_SUPPLEMENT_ZH if lang == "zh" else _GALLERY_SUPPLEMENT_EN
+        configured = dict(base_supplement.get(world_id, {}))
         configured.update(world.get("gallery") or {})
         if configured.get("visible", True) is False:
             continue
@@ -1438,7 +1568,29 @@ def _build_gallery_artworks():
 
 @app.route("/api/gallery", methods=["GET"])
 def gallery_data():
+    lang = request.args.get("lang") or _current_lang()
     artworks = _build_gallery_artworks()
+    if lang == "zh":
+        return jsonify({
+            "intro": {
+                "kicker": "修复画廊",
+                "title": "被修复的画作安放光芒之处",
+                "body": [
+                    "这间画廊是《被诅咒的画布》的宁静侧翼：一份关于画框、声音和世界的鲜活记录——它们可能在博物馆陷入沉寂时敞开。",
+                    "每一页将一幅画作与它的创作者配成一对，然后回忆起你在游戏中与它们共同经历的一段旅程：什么曾缺失，什么被修复，以及光芒回归后留下了什么。"
+                ]
+            },
+            "artworks": artworks,
+            "outro": {
+                "kicker": "画框之后",
+                "title": "博物馆不只是它的围墙",
+                "body": [
+                    "在旅程的终点，那些画作不再只是墙上遥远的杰作。它们已变成你跨越的场所、你回应过的声音、你帮助修复的脆弱世界。",
+                    "诅咒因注意力化为行动而瓦解。你仔细观察，认真聆听，并修复了每位艺术家最需要的东西：光芒、平衡，以及一个瞬间的鲜活颜色。",
+                    "当大门敞开时，画廊留在你身后——不是你逃离的房间，而是一段关于艺术的记忆，生动到足以踏入其中。"
+                ]
+            }
+        })
     return jsonify({
         "intro": {
             "kicker": "Restoration Gallery",
@@ -1493,6 +1645,13 @@ def return_from_ending():
 
 def _build_story_from_memory(gs):
     """Generate a novella-style recap with stats footer."""
+    lang = _current_lang()
+    if lang == "zh":
+        return _build_story_zh(gs)
+    return _build_story_en(gs)
+
+
+def _build_story_en(gs):
     memory = gs.memory
     events = list(memory.events) if memory else []
     transcript = memory.get_transcript() if memory else []
@@ -1621,22 +1780,162 @@ def _build_story_from_memory(gs):
     return "\n".join(lines)
 
 
+def _build_story_zh(gs):
+    memory = gs.memory
+    events = list(memory.events) if memory else []
+    transcript = memory.get_transcript() if memory else []
+
+    def _world_name(world_id):
+        w = get_world(world_id)
+        return w["name"] if w else world_id.replace("_", " ").title()
+
+    def _clean_line(text):
+        s = (text or "").strip()
+        s = re.sub(r"\s+", " ", s)
+        return s
+
+    player_lines = [line for line in transcript if line.get("speaker") == "Player"]
+    narration_lines = [line for line in transcript if line.get("type") == "scene"]
+    npc_lines = [line for line in transcript if line.get("type") == "npc_reply"]
+
+    location_switches = 0
+    last_location = None
+    for line in transcript:
+        location_id = line.get("location_id")
+        if location_id and location_id != last_location:
+            if last_location is not None:
+                location_switches += 1
+            last_location = location_id
+
+    quest_events = [e for e in events if "Quest completed" in e]
+    quest_by_world = {}
+    for event in quest_events:
+        m = re.search(r"Quest completed in\s+([a-z_]+)", event)
+        if m:
+            world_id = m.group(1)
+            quest_by_world[world_id] = _world_name(world_id)
+
+    first_command = _clean_line(player_lines[0]["text"]) if player_lines else "（未捕获命令。）"
+    last_command = _clean_line(player_lines[-1]["text"]) if player_lines else "（未捕获命令。）"
+
+    first_scene = _clean_line(narration_lines[0]["text"]) if narration_lines else "大厅一片寂静，月光将银辉洒在地板上。"
+    last_scene = _clean_line(narration_lines[-1]["text"]) if narration_lines else "博物馆的大门打开了，夜色终于松了一口气。"
+
+    starry_quote = None
+    wave_quote = None
+    sunrise_quote = None
+    for line in npc_lines:
+        speaker = (line.get("speaker") or "").lower()
+        if ("vincent" in speaker or "梵高" in speaker) and not starry_quote:
+            starry_quote = _clean_line(line.get("text"))
+        if ("hokusai" in speaker or "北斋" in speaker) and not wave_quote:
+            wave_quote = _clean_line(line.get("text"))
+        if ("monet" in speaker or "莫奈" in speaker) and not sunrise_quote:
+            sunrise_quote = _clean_line(line.get("text"))
+
+    lines = []
+    lines.append("# 被诅咒的画布 — 午夜博物馆\n")
+    lines.append("## 你的冒险短篇\n")
+
+    lines.append(
+        "在这个本应大门紧锁、每条走廊都沉入梦乡的时刻，"
+        "你站在被施了魔法的博物馆中，聆听寂静的呼吸。"
+        f"你的第一个动作简单而果断：**{first_command}**。"
+        f"从那一刻起，夜晚以色彩和气象作答：{first_scene}"
+    )
+    lines.append("")
+
+    if "starry_night" in gs.visited_worlds:
+        lines.append(
+            "在《星月夜》中，天空如活着的咒语般翻涌。"
+            "文森特·梵高在同一颗心跳中承载着悲伤与固执的希望，"
+            "而你学会了像阅读语言一样阅读光芒。"
+        )
+        if starry_quote:
+            lines.append(f"> 文森特·梵高：「{starry_quote}」")
+        lines.append(
+            "凭借灯笼的光芒和仔细的搜寻，你将失窃的颜色拉回了这个世界。"
+            "星星不再仅是闪耀——它们歌唱。"
+        )
+        lines.append("")
+
+    if "great_wave" in gs.visited_worlds:
+        lines.append(
+            "在《神奈川冲浪里》中，大海在崩塌的边缘屏住了呼吸。"
+            "葛饰北斋以一种被恐惧磨砺出的沉着等待，每一道浪峰都像是一个问号。"
+        )
+        if wave_quote:
+            lines.append(f"> 葛饰北斋：「{wave_quote}」")
+        lines.append(
+            "你找到了潮汐隐藏的东西，以节奏回应风暴，将平静归还给海水。"
+            "当那道海浪终于弯曲而非粉碎时，画作记起了它的平衡。"
+        )
+        lines.append("")
+
+    if "impression_sunrise" in gs.visited_worlds:
+        lines.append(
+            "在《印象·日出》中，港口消融在雾霭、烟雾和倒影之中。"
+            "克劳德·莫奈凝视着如同转瞬即逝的感觉般的黎明，仿佛整个世界都依赖于那一抹橙色的光芒。"
+        )
+        if sunrise_quote:
+            lines.append(f"> 克劳德·莫奈：「{sunrise_quote}」")
+        lines.append(
+            "用雾透镜和找回的颜料，你让太阳恢复了脉搏。"
+            "水面以色彩的涟漪作答，而清晨记起了如何开始。"
+        )
+        lines.append("")
+
+    lines.append(
+        "当每一幅画布都被修复后，博物馆似乎换了温度，像松了一口气。"
+        f"你的最后一个动作是 **{last_command}**。"
+        f"夜晚最后还给你的是：{last_scene}"
+    )
+    lines.append("")
+    lines.append("大门敞开了。你走了出去，带着盐味、星光、日出，以及三个如今已知道你名字的世界。")
+    lines.append("")
+    lines.append("---")
+    lines.append("## 游戏统计")
+    lines.append(f"- 总回合数：{gs.turn_count}")
+    lines.append(f"- 场景转换次数：{location_switches}")
+    lines.append(f"- 玩家输入命令数：{len(player_lines)}")
+    lines.append(f"- 叙事段落数：{len(narration_lines)}")
+    lines.append(f"- NPC 对话记录数：{len(npc_lines)}")
+    if quest_by_world:
+        lines.append(f"- 已完成任务：{'、'.join(quest_by_world.values())}")
+    else:
+        lines.append("- 已完成任务：无")
+    lines.append(f"- 已访问的世界：{'、'.join(_world_name(w) for w in sorted(gs.visited_worlds))}")
+
+    return "\n".join(lines)
+
+
 def _build_chat_log(gs):
     """Build a full timeline transcript in screenplay format."""
+    lang = _current_lang()
     memory = gs.memory
     transcript = memory.get_transcript() if memory else []
 
-    if not transcript:
-        return "# The Cursed Canvas - Full Dialogue Timeline\n\n(No transcript captured in this run.)"
+    if lang == "zh":
+        if not transcript:
+            return "# 被诅咒的画布 — 完整对话时间线\n\n（本次游戏未捕获任何对话记录。）"
+        title = "# 被诅咒的画布 — 完整对话时间线"
+        notes_title = "## 记录说明"
+        notes = ["- 按捕获的回合顺序排列。", "- 包含玩家命令、叙事和 NPC 对话。"]
+    else:
+        if not transcript:
+            return "# The Cursed Canvas - Full Dialogue Timeline\n\n(No transcript captured in this run.)"
+        title = "# The Cursed Canvas - Full Dialogue Timeline"
+        notes_title = "## Transcript Notes"
+        notes = ["- Ordered exactly by captured turn sequence.", "- Includes player commands, narration, and NPC dialogue."]
 
     def _slug_to_scene(world_id):
         w = get_world(world_id)
         return w["name"].upper() if w else world_id.replace("_", " ").upper()
 
     lines = []
-    lines.append("# The Cursed Canvas - Full Dialogue Timeline")
+    lines.append(title)
     lines.append("")
-    lines.append("## Screenplay Transcript")
+    lines.append("## Screenplay Transcript" if lang != "zh" else "## 剧本式记录")
     lines.append("")
 
     current_scene = None
@@ -1672,9 +1971,9 @@ def _build_chat_log(gs):
 
     lines.append("")
     lines.append("---")
-    lines.append("## Transcript Notes")
-    lines.append("- Ordered exactly by captured turn sequence.")
-    lines.append("- Includes player commands, narration, and NPC dialogue.")
+    lines.append(notes_title)
+    for note in notes:
+        lines.append(note)
 
     return "\n".join(lines)
 
@@ -1717,16 +2016,22 @@ def _restore_state(d):
     return gs
 
 
-def _state_summary(gs):
+def _state_summary(gs, lang=None):
+    if lang is None:
+        lang = _current_lang()
     w = get_world(gs.current_world)
     quests = dict(gs.quests_completed)
     return {
-        "location": w["name"] if w else gs.current_world,
+        "location": get_world_name(gs.current_world, lang),
         "location_id": gs.current_world,
+        "location_name": get_world_name(gs.current_world, lang),
         "turn_count": gs.turn_count,
         "inventory_count": len(gs.inventory),
+        "inventory_ids": list(gs.inventory),
         "quests_completed": sum(1 for done in quests.values() if done),
+        "quests_completed_count": sum(1 for done in quests.values() if done),
         "quests_total": len(quests),
+        "quests_completed_ids": {k: v for k, v in quests.items() if v},
         "game_complete": gs.game_complete,
     }
 

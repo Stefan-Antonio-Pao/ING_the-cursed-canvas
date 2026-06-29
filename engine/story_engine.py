@@ -3,6 +3,43 @@ from engine.memory import ContextMemory
 import random
 import re
 
+
+def _normalize_artwork_titles(text):
+    """Normalize known title mistranslations without touching visual wave descriptions."""
+    if not isinstance(text, str) or not text:
+        return text
+
+    replacements = {
+        "《巨浪》": "《神奈川冲浪里》",
+        "《大浪》": "《神奈川冲浪里》",
+        "巨浪画作": "《神奈川冲浪里》画作",
+        "大浪画作": "《神奈川冲浪里》画作",
+        "巨浪版画": "《神奈川冲浪里》版画",
+        "大浪版画": "《神奈川冲浪里》版画",
+        "巨浪世界": "《神奈川冲浪里》世界",
+        "大浪世界": "《神奈川冲浪里》世界",
+        "巨浪副本": "《神奈川冲浪里》副本",
+        "大浪副本": "《神奈川冲浪里》副本",
+        "巨浪画框": "《神奈川冲浪里》画框",
+        "大浪画框": "《神奈川冲浪里》画框",
+    }
+    for wrong, correct in replacements.items():
+        text = text.replace(wrong, correct)
+
+    title_targets = "画作|版画|世界|副本|画框|展区|展厅"
+    text = re.sub(
+        rf"(进入|步入|走进|走入|前往|去往|离开|返回|回到)(?:那幅)?(?:巨浪|大浪)(?=({title_targets})?[，。！？、\s]|$)",
+        r"\1《神奈川冲浪里》",
+        text,
+    )
+    text = re.sub(
+        r"(?:巨浪|大浪)(?=——我[^。！？\n]{0,16}(?:作品|创作|一笔))",
+        "《神奈川冲浪里》中的海浪",
+        text,
+    )
+    return text
+
+
 class GameState:
     def __init__(self):
         self.current_world = "museum"
@@ -135,9 +172,8 @@ class GameState:
         cmd_lower = command.lower()
         used_item_id = None
         def _match_item(iid):
-            name = get_item(iid)["name"].lower()
-            iid_spaced = iid.replace("_", " ")
-            return name in cmd_lower or iid_spaced in cmd_lower
+            item = get_item(iid)
+            return bool(item and self._mentions_item(iid, item, cmd_lower))
         for item_id in self.inventory:
             if _match_item(item_id): used_item_id = item_id; break
         if not used_item_id:
@@ -146,7 +182,10 @@ class GameState:
         if not used_item_id:
             for item_id, hidden in world.get("items_hidden", {}).items():
                 if _match_item(item_id):
-                    if hidden.get("reveal_item") in self.inventory and item_id not in self.items_found:
+                    if (hidden.get("reveal_item") in self.inventory and
+                        item_id not in self.items_found and
+                        item_id in self.revealed_items and
+                        self._looks_like_item_take_attempt(cmd_lower)):
                         used_item_id = item_id; break
         if not used_item_id: return get_default("item_not_recognized"), None, None
         item = get_item(used_item_id)
@@ -166,8 +205,11 @@ class GameState:
                 scene = world["quest_completion"]
                 self.quests_completed[self.current_world] = True
                 self.memory.add_event(f"Quest completed in {self.current_world}!")
-            # Great Wave: use shell_flute when you have both items (play music with Hokusai)
-            elif self.current_world == "great_wave" and "calming_stone" in self.inventory and "shell_flute" in self.inventory and used_item_id == "shell_flute":
+            # Great Wave requires an explicit combined action, not merely replaying the flute.
+            elif (self.current_world == "great_wave" and
+                  "calming_stone" in self.inventory and
+                  "shell_flute" in self.inventory and
+                  self._player_attempted_world_solution(self.current_world, command)):
                 scene = world["quest_completion"]
                 self.quests_completed[self.current_world] = True
                 self.memory.add_event(f"Quest completed in {self.current_world}!")
@@ -185,7 +227,8 @@ class GameState:
         if self.quests_completed.get(self.current_world): return get_default("solve_already_done"), None, None
         cw = self.current_world
         can = (cw == "starry_night" and "yellow_pigment" in self.inventory) or \
-              (cw == "great_wave" and "calming_stone" in self.inventory and "shell_flute" in self.inventory) or \
+              (cw == "great_wave" and "calming_stone" in self.inventory and "shell_flute" in self.inventory and
+               self._player_attempted_world_solution(cw, command)) or \
               (cw == "impression_sunrise" and "sunrise_pigment" in self.inventory and
                self._player_attempted_world_solution(cw, command))
         if can:
@@ -296,6 +339,8 @@ class GameState:
         if npc_reply:
             for wrong, correct in _name_fixes.items():
                 npc_reply = npc_reply.replace(wrong, correct)
+        scene = _normalize_artwork_titles(scene)
+        npc_reply = _normalize_artwork_titles(npc_reply)
 
         # Validate npc_name against actual NPC data
         world = get_world(self.current_world)
@@ -350,10 +395,8 @@ class GameState:
             search_texts = [scene_lower, npc_lower, player_cmd_lower]
 
             def _item_mentioned(item_id, item):
-                name_lower = item["name"].lower()
-                id_spaced = item_id.replace("_", " ")
                 return any(
-                    name_lower in t or id_spaced in t or item_id in t
+                    self._mentions_item(item_id, item, t)
                     for t in search_texts
                 )
 
@@ -364,16 +407,6 @@ class GameState:
                         self.inventory.append(item_id)
                         self.items_found.add(item_id)
                         break
-            else:
-                for hid_id, hid_data in world.get("items_hidden", {}).items():
-                    if hid_id not in self.items_found:
-                        reveal_item = hid_data.get("reveal_item", "")
-                        if reveal_item in self.inventory:
-                            hid_item = get_item(hid_id)
-                            if hid_item and _item_mentioned(hid_id, hid_item):
-                                self.inventory.append(hid_id)
-                                self.items_found.add(hid_id)
-                                break
 
         elif intent == "solve":
             # Only allow quest completion if player has required items
@@ -381,7 +414,10 @@ class GameState:
             can_solve = False
             if cw == "starry_night" and "yellow_pigment" in self.inventory:
                 can_solve = True
-            elif cw == "great_wave" and "calming_stone" in self.inventory and "shell_flute" in self.inventory:
+            elif (cw == "great_wave" and
+                  "calming_stone" in self.inventory and
+                  "shell_flute" in self.inventory and
+                  self._player_attempted_world_solution(cw, player_cmd_lower)):
                 can_solve = True
             elif (cw == "impression_sunrise" and "sunrise_pigment" in self.inventory and
                   self._player_attempted_world_solution(cw, player_cmd_lower)):
@@ -398,7 +434,9 @@ class GameState:
             can_solve = False
             if cw == "starry_night" and "yellow_pigment" in self.inventory:
                 can_solve = True
-            elif cw == "great_wave" and "calming_stone" in self.inventory and "shell_flute" in self.inventory:
+            elif (cw == "great_wave" and
+                  "calming_stone" in self.inventory and
+                  "shell_flute" in self.inventory):
                 can_solve = True
             elif cw == "impression_sunrise" and "sunrise_pigment" in self.inventory:
                 can_solve = True
@@ -419,7 +457,14 @@ class GameState:
                     "play", "melody", "music", "song", "flute",
                     "ripples", "gentle", "settles", "peace",
                     "sunrise", "orange", "reflection", "harbor", "dawn",
-                    "mist", "glimmer", "gleam", "pigment"
+                    "mist", "glimmer", "gleam", "pigment",
+                    "修复", "完成", "归还", "交给", "递给",
+                    "点亮", "照亮", "恢复", "平息", "安抚",
+                    "黄色", "颜料", "光", "太阳", "日出", "橙色",
+                    "笛", "石", "海浪", "旋律", "音乐",
+                    "和鸣", "共鸣", "合鸣", "合奏",
+                    "harmony", "harmonize", "resonate", "resonance",
+                    "duet", "together", "both"
                 ]
                 if player_attempted_solution and any(kw in combined for kw in quest_keywords):
                     self.quests_completed[cw] = True
@@ -435,6 +480,14 @@ class GameState:
                 item = get_item(item_id)
                 pickup_lines.append(item.get("pickup_msg") if item and item.get("pickup_msg") else f"You pick up {item_id.replace('_', ' ')}.")
             scene = " ".join(pickup_lines)
+
+        if not self.quests_completed.get(action_world_id):
+            scene, npc_reply = self._guard_premature_progress_claims(
+                action_world_id,
+                player_cmd_lower,
+                scene,
+                npc_reply,
+            )
 
         # Store NPC conversation for talk intent
         if intent == "talk" and npc_reply and npc_name:
@@ -488,6 +541,7 @@ class GameState:
         for hid_id, hid_data in world.get("items_hidden", {}).items():
             if hid_id in self.items_found:
                 continue
+            was_revealed = hid_id in self.revealed_items
             reveal_item = hid_data.get("reveal_item", "")
             if reveal_item and reveal_item not in self.inventory:
                 continue
@@ -514,26 +568,116 @@ class GameState:
                     "glimmers",
                     "orange gleam",
                     "small, smooth pebble",
+                    "揭示",
+                    "显现",
+                    "出现",
+                    "露出",
+                    "浮现",
+                    "看见",
+                    "发现",
+                    "闪烁",
+                    "发光",
+                    "微光",
+                    "映出",
                 ]
             )
 
             if hinted_by_narration and reveal_cues:
                 self.revealed_items.add(hid_id)
 
-            pickup_in_narration = self._narration_signals_pickup(narrative) and hinted_by_narration
-            can_take_revealed = asked_by_command and hid_id in self.revealed_items
+            can_take_revealed = asked_by_command and was_revealed
 
-            if pickup_in_narration or can_take_revealed:
+            if can_take_revealed:
                 self.inventory.append(hid_id)
                 self.items_found.add(hid_id)
                 awarded.append(hid_id)
 
         return awarded
 
+    def _guard_premature_progress_claims(self, world_id, player_cmd_lower, scene, npc_reply):
+        """Keep narrative claims aligned with validated state progression."""
+        if world_id != "great_wave":
+            return scene, npc_reply
+
+        combined = f"{scene or ''} {npc_reply or ''}".lower()
+        stone = get_item("calming_stone")
+        if not stone:
+            return scene, npc_reply
+
+        claimed_stone_pickup = (
+            "calming_stone" not in self.inventory
+            and self._mentions_item("calming_stone", stone, combined)
+            and self._narration_signals_pickup(combined)
+        )
+        claimed_completion = (
+            self._narrative_claims_quest_completion(world_id, combined)
+            and not self._player_attempted_world_solution(world_id, player_cmd_lower)
+        )
+
+        if not (claimed_stone_pickup or claimed_completion):
+            return scene, npc_reply
+
+        lang_is_zh = self._contains_cjk(stone.get("name", ""))
+        world = get_world(world_id)
+
+        if "shell_flute" in self.inventory and "calming_stone" not in self.inventory:
+            hidden = (world or {}).get("items_hidden", {}).get("calming_stone", {})
+            self.revealed_items.add("calming_stone")
+            reveal_msg = hidden.get("reveal_msg") or (
+                "安宁石已经显现。" if lang_is_zh else "The calming stone is revealed."
+            )
+            reminder = (
+                "安宁石已经显现，但还没有进入你的物品栏。你需要明确拾取它，之后再让海螺笛与安宁石和鸣。"
+                if lang_is_zh
+                else "The calming stone is visible, but it is not in your inventory yet. Pick it up before using it with the shell flute."
+            )
+            return f"{reveal_msg} {reminder}", None
+
+        if "shell_flute" in self.inventory and "calming_stone" in self.inventory:
+            reminder = (
+                "海螺笛与安宁石彼此回应，但还没有真正和鸣。你需要明确同时使用二者，让旋律与静默合在一起。"
+                if lang_is_zh
+                else "The shell flute and calming stone answer each other, but they have not acted in harmony yet. Use them together to calm the wave."
+            )
+            return reminder, None
+
+        return scene, npc_reply
+
+    @staticmethod
+    def _narrative_claims_quest_completion(world_id, narrative):
+        if world_id != "great_wave":
+            return False
+        return any(
+            cue in (narrative or "")
+            for cue in [
+                "painting is restored",
+                "print is restored",
+                "balance is restored",
+                "quest completed",
+                "restored.",
+                "completed",
+                "you have restored",
+                "画作已被修复",
+                "版画已被修复",
+                "平衡已恢复",
+                "副本完成",
+                "任务完成",
+                "已经修复",
+                "已修复",
+                "完成了它的宿命",
+                "找回这幅画的安宁",
+            ]
+        )
+
     def _mentions_item(self, item_id, item, text):
         if not text:
             return False
+        text = text.lower()
         for alias in self._item_aliases(item_id, item):
+            if self._contains_cjk(alias):
+                if alias in text:
+                    return True
+                continue
             if " " in alias:
                 if alias in text:
                     return True
@@ -542,6 +686,10 @@ class GameState:
                     return True
         return False
 
+    @staticmethod
+    def _contains_cjk(value):
+        return bool(re.search(r"[\u3400-\u9fff]", value or ""))
+
     def _item_aliases(self, item_id, item):
         base = {
             item_id.lower(),
@@ -549,15 +697,33 @@ class GameState:
             item.get("name", "").lower(),
         }
         custom = {
-            "calming_stone": {"stone", "calming stone", "calm stone", "smooth stone", "pebble"},
-            "yellow_pigment": {"yellow", "pigment", "yellow pigment", "yellow paint", "paint tube"},
-            "shell_flute": {"flute", "shell flute", "sea flute"},
-            "lantern": {"lantern", "enchanted lantern"},
-            "mist_lens": {"lens", "mist lens", "glass lens", "fog lens"},
-            "sunrise_pigment": {"sunrise", "sunrise pigment", "orange pigment", "orange", "vial", "sun pigment"},
+            "calming_stone": {
+                "stone", "calming stone", "calm stone", "smooth stone", "pebble",
+                "安宁石", "石头", "石子", "石", "平静石", "镇静石"
+            },
+            "yellow_pigment": {
+                "yellow", "pigment", "yellow pigment", "yellow paint", "paint tube",
+                "黄色颜料", "黄颜料", "颜料", "黄色", "黄颜色", "黄色油彩", "颜料管"
+            },
+            "shell_flute": {
+                "flute", "shell flute", "sea flute",
+                "海螺笛", "螺笛", "笛子", "笛", "海螺", "贝壳笛"
+            },
+            "lantern": {
+                "lantern", "enchanted lantern",
+                "魔法灯笼", "灯笼", "灯", "古老灯笼", "铜灯笼", "魔法灯"
+            },
+            "mist_lens": {
+                "lens", "mist lens", "glass lens", "fog lens",
+                "雾透镜", "透镜", "镜片", "镜", "玻璃透镜", "雾镜"
+            },
+            "sunrise_pigment": {
+                "sunrise", "sunrise pigment", "orange pigment", "orange", "vial", "sun pigment",
+                "日出颜料", "日出", "橙色颜料", "橙色", "橙颜料", "颜料瓶", "小瓶"
+            },
         }
         base.update(custom.get(item_id, set()))
-        return {a.strip() for a in base if a and a.strip()}
+        return {a.strip().lower() for a in base if a and a.strip()}
 
     @staticmethod
     def _looks_like_item_take_attempt(command):
@@ -570,6 +736,24 @@ class GameState:
                 "grab",
                 "collect",
                 "obtain",
+                "拿",
+                "拿起",
+                "拿走",
+                "拿到",
+                "取",
+                "取走",
+                "取得",
+                "取下",
+                "捡",
+                "捡起",
+                "拾起",
+                "拾取",
+                "收集",
+                "获得",
+                "抓住",
+                "握住",
+                "提起",
+                "摘下",
             ]
         )
 
@@ -585,6 +769,21 @@ class GameState:
                 "you collect",
                 "you close your hand around",
                 "rests in your palm",
+                "你捡起",
+                "你拿起",
+                "你拿走",
+                "你拿到",
+                "你取走",
+                "你取下",
+                "你拾起",
+                "你伸出手",
+                "你握住",
+                "握在手中",
+                "落入你手中",
+                "收入",
+                "放进",
+                "提起",
+                "拿到了",
             ]
         )
 
@@ -592,14 +791,63 @@ class GameState:
     def _player_attempted_world_solution(world_id, command):
         cmd = (command or "").lower()
         if world_id == "great_wave":
-            return (
-                any(v in cmd for v in ["use", "play", "blow", "calm", "soothe", "restore", "solve", "duet", "song", "melody"])
-                and any(k in cmd for k in ["flute", "stone", "wave", "hokusai", "them", "both"])
-            )
+            guidance_questions = [
+                "how can i", "how do i", "what should i", "where should i",
+                "can i", "could i", "should i", "tell me",
+                "怎么", "如何", "我该", "能否", "可以", "告诉我", "哪里",
+            ]
+            if "?" in cmd or "？" in cmd or any(q in cmd for q in guidance_questions):
+                return False
+
+            has_flute = any(k in cmd for k in [
+                "flute", "shell flute", "shell", "song", "melody",
+                "笛", "笛子", "海螺笛", "海螺", "旋律", "乐声",
+            ])
+            has_stone = any(k in cmd for k in [
+                "stone", "calming stone", "calm stone", "stillness",
+                "石", "石头", "安宁石", "静默", "宁静",
+            ])
+            together = any(k in cmd for k in [
+                "together", "both", "with the stone", "with stone", "with the flute",
+                "combine", "unite", "duet", "harmony", "harmonize", "resonate",
+                "resonance", "in unison", "as one", "concert",
+                "一起", "同时", "二者", "两者", "它们", "和鸣", "共鸣",
+                "合鸣", "合奏", "结合", "一同", "同用", "配合",
+            ])
+            solve_verb = any(v in cmd for v in [
+                "calm", "soothe", "restore", "solve", "fix", "complete",
+                "balance", "harmonize", "resonate",
+                "平息", "安抚", "修复", "恢复", "解决", "完成",
+                "平衡", "调和", "和鸣", "共鸣", "合鸣", "合奏",
+            ])
+            wave_target = any(k in cmd for k in [
+                "wave", "sea", "ocean", "hokusai", "kanagawa",
+                "海浪", "大海", "海洋", "北斋", "神奈川", "冲浪",
+            ])
+            standalone_harmony = any(k in cmd.strip() for k in [
+                "duet", "harmony", "harmonize", "resonate",
+                "和鸣", "共鸣", "合鸣", "合奏",
+            ])
+
+            if standalone_harmony:
+                return True
+            if together and (has_flute or has_stone or "them" in cmd or "它们" in cmd or "二者" in cmd or "两者" in cmd):
+                return True
+            if has_flute and has_stone and (together or solve_verb):
+                return True
+            if solve_verb and wave_target and together:
+                return True
+            return False
         if world_id == "starry_night":
             return (
-                any(v in cmd for v in ["use", "give", "return", "restore", "solve", "hand"])
-                and any(k in cmd for k in ["yellow", "pigment", "paint", "star"])
+                any(v in cmd for v in [
+                    "use", "give", "return", "restore", "solve", "hand",
+                    "使用", "交给", "递给", "归还", "还给", "修复", "解决", "交出", "递上"
+                ])
+                and any(k in cmd for k in [
+                    "yellow", "pigment", "paint", "star",
+                    "黄色", "颜料", "油彩", "星", "星星", "梵高"
+                ])
             )
         if world_id == "impression_sunrise":
             guidance_questions = [
@@ -611,17 +859,34 @@ class GameState:
                 "could i",
                 "should i",
                 "tell me",
+                "怎么",
+                "如何",
+                "我该",
+                "能否",
+                "可以",
+                "告诉我",
             ]
-            if "?" in cmd or any(q in cmd for q in guidance_questions):
+            if "?" in cmd or "？" in cmd or any(q in cmd for q in guidance_questions):
                 return False
             return (
-                any(v in cmd for v in ["use", "give", "return", "restore", "solve", "hand", "touch", "paint", "apply", "shine", "color", "release"])
-                and any(k in cmd for k in ["sunrise", "sun", "orange", "pigment", "color", "light", "glow", "vial"])
-                and any(t in cmd for t in ["sunrise", "sun", "sky", "canvas", "painting", "harbor", "monet", "together", "pigment"])
+                any(v in cmd for v in [
+                    "use", "give", "return", "restore", "solve", "hand", "touch", "paint", "apply", "shine", "color", "release",
+                    "使用", "交给", "递给", "归还", "还给", "修复", "解决", "触碰", "涂", "照亮", "上色", "释放"
+                ])
+                and any(k in cmd for k in [
+                    "sunrise", "sun", "orange", "pigment", "color", "light", "glow", "vial",
+                    "日出", "太阳", "橙色", "颜料", "颜色", "光", "发光", "小瓶"
+                ])
+                and any(t in cmd for t in [
+                    "sunrise", "sun", "sky", "canvas", "painting", "harbor", "monet", "together", "pigment",
+                    "日出", "太阳", "天空", "画布", "画", "港口", "莫奈", "一起", "颜料"
+                ])
             )
         return False
 
     def _record_turn_transcript(self, player_command, scene, npc_reply, npc_name):
+        scene = _normalize_artwork_titles(scene)
+        npc_reply = _normalize_artwork_titles(npc_reply)
         self.memory.add_transcript_line(
             turn=self.turn_count,
             location_id=self.current_world,
@@ -660,6 +925,8 @@ class GameState:
         if npc_reply:
             for wrong, correct in _name_fixes.items():
                 npc_reply = npc_reply.replace(wrong, correct)
+        scene = _normalize_artwork_titles(scene)
+        npc_reply = _normalize_artwork_titles(npc_reply)
 
         # Build enriched response for the new UI
         exits_data = []

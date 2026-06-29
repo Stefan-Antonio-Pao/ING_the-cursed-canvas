@@ -1,5 +1,82 @@
 /* The Cursed Canvas — Game client with particles, typewriter, and side panel */
 
+// ── Title screen state ──
+let titleScreenDismissed = false;
+let titleParticles = [];
+let titleParticleFrameId = null;
+const TITLE_PARTICLE_COUNT = 220;
+const TITLE_PARTICLE_THEME_COLORS = [
+    [212, 168, 67],
+    [74, 139, 194],
+    [123, 94, 167],
+    [245, 240, 224],
+    [180, 140, 100],
+    [100, 160, 210]
+];
+
+// ── I18N ──
+window.I18N = null;
+
+async function initI18N(targetLang) {
+    const resp = await fetch(`/api/i18n/${targetLang}`, { cache: "no-store" });
+    if (!resp.ok) throw new Error(`Failed to load i18n for ${targetLang}`);
+    window.I18N = await resp.json();
+    return window.I18N;
+}
+
+function t(path, replacements = {}) {
+    if (!window.I18N) return path;
+    const keys = path.split(".");
+    let value = window.I18N;
+    for (const key of keys) {
+        if (value == null) return path;
+        value = value[key];
+    }
+    if (typeof value !== "string") return path;
+    for (const [k, v] of Object.entries(replacements)) {
+        value = value.replace(`{${k}}`, v);
+    }
+    return value;
+}
+
+async function switchLanguage(lang) {
+    try {
+        const resp = await fetch("/api/language", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({language: lang}),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || "Language switch failed");
+        localStorage.setItem("cursed_canvas_lang", lang);
+        await initI18N(lang);
+        if (settingsData && settingsData.language) {
+            settingsData.language.current = lang;
+        }
+        refreshAllUI(data.ui_state || null);
+        await loadSettings(true);
+    } catch (err) {
+        console.error("Language switch error:", err);
+    }
+}
+
+function refreshAllUI(sidePanelData) {
+    if (locationBadge) locationBadge.textContent = t("game.location_badge_default");
+    if (commandInput) commandInput.placeholder = t("game.input_placeholder");
+    if (sendBtn) sendBtn.textContent = t("game.send");
+    if (panelToggle) panelToggle.textContent = sidePanel && sidePanel.classList.contains("collapsed") ? t("game.panel_toggle_collapsed") : t("game.panel_toggle");
+    if (gameSettingsBtn) gameSettingsBtn.textContent = t("side_panel.settings");
+    setLanguageDisplay();
+    updateQuickActions(currentWorld);
+    updateSidePanel(sidePanelData || null);
+    if (typeof applyI18N === "function") applyI18N();
+    // Re-render gallery if open
+    if (galleryPages.length > 0) {
+        galleryPageIndex = Math.max(0, Math.min(galleryPageIndex, galleryPages.length - 1));
+        renderGalleryPage({ animate: false });
+    }
+}
+
 // ── DOM references ──
 const chatLog = document.getElementById("chat-log");
 const commandForm = document.getElementById("command-form");
@@ -21,6 +98,10 @@ const npcNameDisplay = document.getElementById("npc-name-display");
 const npcRoleDisplay = document.getElementById("npc-role-display");
 const modelStatusText = document.getElementById("model-status-text");
 const loadingOverlay = document.getElementById("loading-overlay");
+const titleScreen = document.getElementById("title-screen");
+const titleParticleCanvas = document.getElementById("title-particles-canvas");
+const titleParticleCtx = titleParticleCanvas ? titleParticleCanvas.getContext("2d") : null;
+const titleContinue = document.querySelector(".title-continue");
 const startScreen = document.getElementById("start-screen");
 const startParticleCanvas = document.getElementById("start-particles-canvas");
 const startParticleCtx = startParticleCanvas ? startParticleCanvas.getContext("2d") : null;
@@ -68,6 +149,7 @@ const localModelProgressBar = document.getElementById("local-model-progress-bar"
 const localModelDetail = document.getElementById("local-model-detail");
 const startStatus = document.getElementById("start-status");
 const saveProgressBtn = document.getElementById("save-progress-btn");
+const gameSettingsBtn = document.getElementById("game-settings-btn");
 const saveSlotDialog = document.getElementById("save-slot-dialog");
 const saveSlotKicker = document.getElementById("save-slot-kicker");
 const saveSlotTitle = document.getElementById("save-slot-title");
@@ -99,6 +181,8 @@ let galleryPageIndex = 0;
 let galleryIsLoading = false;
 let settingsData = null;
 let settingsBusy = false;
+let settingsReturnTarget = "menu";
+let gameInputWasEnabledBeforeSettings = false;
 let galleryTransitionDirection = "next";
 let galleryTransitionTimer = null;
 let galleryBackdropTimer = null;
@@ -148,12 +232,19 @@ let startParticlePaletteStartedAt = 0;
 const START_PARTICLE_THEME_TRANSITION_MS = 680;
 const WORLD_ORDER = ["museum", "starry_night", "great_wave", "impression_sunrise"];
 const ITEM_METADATA = {
-    "Enchanted Lantern": { id: "lantern", world: "starry_night", emoji: "🏮", description: "Reveals what shadow tries to hide." },
-    "Stolen Yellow Pigment": { id: "yellow_pigment", world: "starry_night", emoji: "🟡", description: "A bright stolen note of starlight." },
-    "Shell Flute": { id: "shell_flute", world: "great_wave", emoji: "🐚", description: "Calls rhythm back into the sea." },
-    "Calming Stone": { id: "calming_stone", world: "great_wave", emoji: "🪨", description: "A steady weight for the restless wave." },
-    "Mist Lens": { id: "mist_lens", world: "impression_sunrise", emoji: "🔍", description: "Clarifies reflections without breaking the haze." },
-    "Sunrise Pigment": { id: "sunrise_pigment", world: "impression_sunrise", emoji: "🧡", description: "The orange breath that dawn was missing." },
+    "Enchanted Lantern": { id: "lantern", world: "starry_night", emoji: "🏮", descriptionKey: "item_descriptions.lantern" },
+    "Stolen Yellow Pigment": { id: "yellow_pigment", world: "starry_night", emoji: "🟡", descriptionKey: "item_descriptions.yellow_pigment" },
+    "Shell Flute": { id: "shell_flute", world: "great_wave", emoji: "🐚", descriptionKey: "item_descriptions.shell_flute" },
+    "Calming Stone": { id: "calming_stone", world: "great_wave", emoji: "🪨", descriptionKey: "item_descriptions.calming_stone" },
+    "Mist Lens": { id: "mist_lens", world: "impression_sunrise", emoji: "🔍", descriptionKey: "item_descriptions.mist_lens" },
+    "Sunrise Pigment": { id: "sunrise_pigment", world: "impression_sunrise", emoji: "🧡", descriptionKey: "item_descriptions.sunrise_pigment" },
+    // Chinese translated names (for i18n-aware lookup)
+    "魔法灯笼": { id: "lantern", world: "starry_night", emoji: "🏮", descriptionKey: "item_descriptions.lantern" },
+    "失窃的黄色颜料": { id: "yellow_pigment", world: "starry_night", emoji: "🟡", descriptionKey: "item_descriptions.yellow_pigment" },
+    "海螺笛": { id: "shell_flute", world: "great_wave", emoji: "🐚", descriptionKey: "item_descriptions.shell_flute" },
+    "安宁石": { id: "calming_stone", world: "great_wave", emoji: "🪨", descriptionKey: "item_descriptions.calming_stone" },
+    "雾透镜": { id: "mist_lens", world: "impression_sunrise", emoji: "🔍", descriptionKey: "item_descriptions.mist_lens" },
+    "日出颜料": { id: "sunrise_pigment", world: "impression_sunrise", emoji: "🧡", descriptionKey: "item_descriptions.sunrise_pigment" },
 };
 const ITEM_EMOJI_POOL = [
     "🗝️", "📜", "🧭", "🪞", "💎", "🕯️", "⚙️", "🎨", "🧵", "🪶",
@@ -162,11 +253,214 @@ const ITEM_EMOJI_POOL = [
 ];
 const GENERATED_ITEM_METADATA = {};
 const UNKNOWN_ITEM_EMOJI = "📦";
-const SETTINGS_LANGUAGES = ["English"];
+const LANG_LABELS = {en: "English", zh: "\u7B80\u4F53\u4E2D\u6587"};
 const SETTINGS_MODEL_OPTIONS = [
-    { mode: "api", label: "DeepSeek API" },
-    { mode: "local", label: "Local Model" },
+    { mode: "api", labelKey: "model_status.api_label" },
+    { mode: "local", labelKey: "model_status.local_label" },
 ];
+
+// ── Title screen flow ──
+
+function resizeTitleParticleCanvas() {
+    if (!titleParticleCanvas || !titleParticleCtx) return;
+    const dpr = window.devicePixelRatio || 1;
+    titleParticleCanvas.width = Math.floor(window.innerWidth * dpr);
+    titleParticleCanvas.height = Math.floor(window.innerHeight * dpr);
+    titleParticleCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function createTitleParticle(type) {
+    const w = window.innerWidth || 1;
+    const h = window.innerHeight || 1;
+    const kind = type || (Math.random() > 0.68 ? "streak" : "mote");
+    return {
+        x: Math.random() * w,
+        y: Math.random() * h,
+        r: kind === "streak" ? Math.random() * 2.0 + 0.8 : Math.random() * 3.0 + 0.5,
+        vx: kind === "streak" ? Math.random() * 0.42 + 0.22 : (Math.random() - 0.5) * 0.3,
+        vy: kind === "streak" ? -Math.random() * 0.32 - 0.1 : -Math.random() * 0.32 - 0.06,
+        opacity: kind === "streak" ? Math.random() * 0.32 + 0.26 : Math.random() * 0.42 + 0.16,
+        phase: Math.random() * Math.PI * 2,
+        speed: Math.random() * 0.85 + 0.5,
+        length: kind === "streak" ? Math.random() * 40 + 22 : 0,
+        colorIndex: Math.floor(Math.random() * TITLE_PARTICLE_THEME_COLORS.length),
+        type: kind
+    };
+}
+
+function resetTitleParticles() {
+    titleParticles = [];
+    for (let i = 0; i < TITLE_PARTICLE_COUNT; i++) {
+        titleParticles.push(createTitleParticle());
+    }
+}
+
+function drawTitleParticles() {
+    if (!titleParticleCanvas || !titleParticleCtx) return;
+
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const t = Date.now() * 0.001;
+    const energy = 1.0;
+
+    titleParticleCtx.clearRect(0, 0, w, h);
+    titleParticleCtx.save();
+    titleParticleCtx.globalCompositeOperation = "lighter";
+
+    titleParticles.forEach((p) => {
+        p.phase += 0.016 * p.speed * energy;
+        p.x += p.vx * energy + Math.sin(t * p.speed + p.phase) * 0.15;
+        p.y += p.vy * energy + Math.cos(t * 0.9 + p.phase) * 0.08;
+
+        if (p.y < -50 || p.x > w + 60 || p.x < -60) {
+            Object.assign(p, createTitleParticle(p.type));
+            p.y = h + Math.random() * 40;
+            p.x = Math.random() * w;
+        }
+
+        const shimmer = Math.sin(t * p.speed * 2.8 + p.phase) * 0.35 + 0.65;
+        const alpha = p.opacity * shimmer;
+        const palette = TITLE_PARTICLE_THEME_COLORS;
+        const color = palette[p.colorIndex % palette.length];
+        const particleColor = color.join(", ");
+
+        if (p.type === "streak") {
+            const drift = Math.sin(p.phase) * 10;
+            const gradient = titleParticleCtx.createLinearGradient(
+                p.x, p.y,
+                p.x - p.length - drift, p.y + p.length * 0.28
+            );
+            gradient.addColorStop(0, `rgba(${particleColor}, ${alpha})`);
+            gradient.addColorStop(1, `rgba(${particleColor}, 0)`);
+            titleParticleCtx.strokeStyle = gradient;
+            titleParticleCtx.lineWidth = p.r;
+            titleParticleCtx.beginPath();
+            titleParticleCtx.moveTo(p.x, p.y);
+            titleParticleCtx.lineTo(p.x - p.length - drift, p.y + p.length * 0.28);
+            titleParticleCtx.stroke();
+        } else {
+            titleParticleCtx.beginPath();
+            titleParticleCtx.arc(p.x, p.y, p.r * (0.75 + shimmer * 0.4), 0, Math.PI * 2);
+            titleParticleCtx.fillStyle = `rgba(${particleColor}, ${alpha})`;
+            titleParticleCtx.fill();
+        }
+    });
+
+    titleParticleCtx.restore();
+    titleParticleFrameId = requestAnimationFrame(drawTitleParticles);
+}
+
+function startTitleParticles() {
+    if (!titleParticleCanvas || !titleParticleCtx || titleParticleFrameId) return;
+    resizeTitleParticleCanvas();
+    resetTitleParticles();
+    drawTitleParticles();
+}
+
+function stopTitleParticles() {
+    if (titleParticleFrameId) {
+        cancelAnimationFrame(titleParticleFrameId);
+        titleParticleFrameId = null;
+    }
+    if (titleParticleCtx) {
+        titleParticleCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    }
+}
+
+function dismissTitleScreen() {
+    if (titleScreenDismissed || !titleScreen) return;
+    titleScreenDismissed = true;
+
+    const bridgeTitle = document.getElementById("transition-title");
+    const titleMain = document.querySelector(".title-main");
+    const titleKicker = document.querySelector(".title-kicker");
+    const titleContinue = document.querySelector(".title-continue");
+    const startMenuKicker = document.querySelector("#start-menu .start-kicker");
+    const startMenuTitle = document.querySelector("#start-menu .start-title");
+
+    if (!bridgeTitle || !startScreen) return;
+
+    // 1. Hide "press any key" instantly
+    if (titleContinue) titleContinue.classList.add("hiding");
+
+    // 2. Capture title screen position of the title text
+    const fromRect = titleMain.getBoundingClientRect();
+
+    // 3. Show start screen (invisible) and measure its title position
+    showStartView("menu");
+    startScreen.classList.remove("hidden");
+    startScreen.classList.add("entering");
+    setStartParticleTheme("museum");
+    if (startParticleCanvas) startParticleCanvas.style.opacity = "0";
+
+    const toRect = startMenuTitle.getBoundingClientRect();
+    const kickerToRect = startMenuKicker.getBoundingClientRect();
+
+    // 4. Hide start menu's own kicker and title (bridge takes over)
+    startMenuKicker.classList.remove("visible");
+    startMenuKicker.style.opacity = "0";
+    startMenuTitle.classList.remove("visible");
+    startMenuTitle.style.opacity = "0";
+
+    // 5. Position bridge overlay at the title screen location
+    const dx = toRect.left - fromRect.left + (toRect.width - fromRect.width) / 2;
+    const dy = toRect.top - fromRect.top + (toRect.height - fromRect.height) / 2;
+
+    bridgeTitle.classList.remove("hidden");
+    bridgeTitle.style.transform = "";
+
+    // Copy current text into bridge (i18n-safe)
+    const bridgeKicker = bridgeTitle.querySelector(".transition-title-kicker");
+    const bridgeMain = bridgeTitle.querySelector(".transition-title-main");
+    if (bridgeKicker) bridgeKicker.textContent = titleKicker ? titleKicker.textContent : "";
+    if (bridgeMain) {
+        bridgeMain.textContent = titleMain.textContent;
+        bridgeMain.setAttribute("data-text", titleMain.getAttribute("data-text") || titleMain.textContent);
+    }
+
+    // 6. Start particles on start screen
+    startStartParticles();
+
+    // 7. Hide title screen content, fade particles
+    const content = titleScreen.querySelector(".title-screen-content");
+    if (content) content.style.opacity = "0";
+    if (titleParticleCanvas) titleParticleCanvas.classList.add("fading");
+
+    // 8. Animate: bridge slides + shrinks, start screen fades in
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            bridgeTitle.classList.add("animate");
+            bridgeTitle.style.transform = `translate(${dx}px, ${dy}px)`;
+            startScreen.classList.add("show");
+            if (startParticleCanvas) startParticleCanvas.style.transition = "opacity 0.55s ease 0.1s";
+            if (startParticleCanvas) startParticleCanvas.style.opacity = "1";
+        });
+    });
+
+    // 9. After transition completes, remove bridge and reveal real start elements
+    setTimeout(() => {
+        bridgeTitle.classList.add("hidden");
+        bridgeTitle.classList.remove("animate");
+        bridgeTitle.style.transform = "";
+        titleScreen.classList.add("hidden");
+        titleScreen.classList.remove("dismissing");
+        if (content) content.style.opacity = "";
+        stopTitleParticles();
+
+        // Reveal start menu's real kicker/title
+        startMenuKicker.classList.add("visible");
+        startMenuTitle.classList.add("visible");
+
+        // Reveal buttons staggered
+        const btns = document.querySelectorAll("#start-menu .start-btn");
+        btns.forEach((btn, i) => {
+            btn.style.animationDelay = (0.08 * i) + "s";
+            btn.classList.add("revealed");
+        });
+
+        if (newAdventureBtn) newAdventureBtn.focus();
+    }, 650);
+}
 
 // ── Start screen flow ──
 function setGameInputEnabled(enabled) {
@@ -344,17 +638,20 @@ function getItemMetadata(itemName) {
             id: itemName,
             world: "museum",
             emoji: ITEM_EMOJI_POOL.find((emoji) => !usedEmojis.has(emoji)) || UNKNOWN_ITEM_EMOJI,
-            description: "Stored in your collection."
+            descriptionKey: null,
         };
     }
     return GENERATED_ITEM_METADATA[itemName];
 }
 
 function formatInventoryCount(count) {
-    return `${count} ${count === 1 ? "item" : "items"}`;
+    const n = Number(count) || 0;
+    return `${n} ${n === 1 ? t("inventory.item") : t("inventory.items")}`;
 }
 
 function formatWorldTitle(worldId) {
+    const i18nName = t("world_names." + worldId);
+    if (i18nName && !i18nName.startsWith("world_names.")) return i18nName;
     return WORLD_NAMES[worldId] || String(worldId || "museum")
         .split("_")
         .map((part) => part ? part.charAt(0).toUpperCase() + part.slice(1) : part)
@@ -393,7 +690,7 @@ function syncInventoryDetails(inventoryNames, locationId) {
                 name,
                 world: meta.world === "museum" ? (locationId || currentWorld || "museum") : meta.world,
                 emoji: meta.emoji,
-                description: meta.description,
+                description: meta.descriptionKey ? t(meta.descriptionKey) : (meta.description || t("inventory.stored_collection")),
                 acquiredOrder: inventoryTimeline.indexOf(name),
             });
         }
@@ -425,7 +722,7 @@ function renderInventorySummary(locationId) {
     if (inventoryDetails.length === 0) {
         const li = document.createElement("li");
         li.className = "empty-inv";
-        li.textContent = "Empty";
+        li.textContent = t("side_panel.inventory_empty");
         inventoryList.appendChild(li);
         return;
     }
@@ -441,7 +738,7 @@ function renderInventorySummary(locationId) {
         const remaining = inventoryDetails.length - 4;
         const li = document.createElement("li");
         li.className = "inventory-more";
-        li.textContent = `${remaining} More Items`;
+        li.textContent = `${remaining} ${t("inventory.more_items")}`;
         inventoryList.appendChild(li);
         return;
     }
@@ -461,11 +758,11 @@ function renderInventoryDialog() {
     if (inventoryDetails.length === 0) {
         inventorySections.innerHTML = `
             <section class="inventory-section inventory-empty">
-                <div class="inventory-item-name">No items stored yet.</div>
-                <div class="inventory-item-meta">Explore the paintings to build your collection.</div>
+                <div class="inventory-item-name">${t("inventory.empty")}</div>
+                <div class="inventory-item-meta">${t("inventory.empty_hint")}</div>
             </section>
         `;
-        inventoryStatus.textContent = "Your inventory is empty.";
+        inventoryStatus.textContent = t("inventory.empty_status");
         inventoryStatus.classList.remove("error");
         return;
     }
@@ -500,7 +797,7 @@ function renderInventoryDialog() {
         inventorySections.appendChild(section);
     });
 
-    inventoryStatus.textContent = `${inventoryDetails.length} total ${inventoryDetails.length === 1 ? "item" : "items"} stored.`;
+    inventoryStatus.textContent = `${inventoryDetails.length} ${t("inventory.total_items")} ${inventoryDetails.length === 1 ? t("inventory.item") : t("inventory.items")} ${t("inventory.stored")}`;
     inventoryStatus.classList.remove("error");
 }
 
@@ -579,8 +876,8 @@ async function refreshSaveSlots() {
 
 function formatSavedAt(savedAt) {
     const date = new Date(savedAt);
-    if (Number.isNaN(date.getTime())) return "Unknown time";
-    return new Intl.DateTimeFormat("en-US", {
+    if (Number.isNaN(date.getTime())) return t("save_slots.unknown_time");
+    return new Intl.DateTimeFormat(window.I18N && window.I18N.lang === "zh" ? "zh-CN" : "en-US", {
         year: "numeric",
         month: "short",
         day: "numeric",
@@ -594,7 +891,7 @@ function buildSummaryFromState(state) {
     const questValues = Object.values(quests);
     const locationId = state && state.current_world ? state.current_world : "museum";
     return {
-        location: WORLD_NAMES[locationId] || locationId.replace(/_/g, " "),
+        location: t("world_names." + locationId) || WORLD_NAMES[locationId] || locationId.replace(/_/g, " "),
         location_id: locationId,
         turn_count: state && Number.isFinite(Number(state.turn_count)) ? Number(state.turn_count) : 0,
         inventory_count: state && Array.isArray(state.inventory) ? state.inventory.length : 0,
@@ -608,9 +905,10 @@ function getSaveSummary(save) {
     return save && save.summary ? save.summary : buildSummaryFromState(save ? save.state : null);
 }
 
-function formatCount(count, singular, plural) {
+function formatCount(count, singularKey, pluralKey) {
     const n = Number(count) || 0;
-    return `${n} ${n === 1 ? singular : (plural || `${singular}s`)}`;
+    const label = n === 1 ? t(singularKey) : t(pluralKey);
+    return `${n} ${label}`;
 }
 
 function setSaveSlotStatus(message, isError = false) {
@@ -627,23 +925,23 @@ function renderSaveSlots() {
         const hasSave = Boolean(save);
         const summary = hasSave ? getSaveSummary(save) : {};
         const actionLabel = saveSlotMode === "save"
-            ? (hasSave ? "Overwrite" : "Create")
-            : (hasSave ? "Load" : "Empty");
+            ? (hasSave ? t("save_slots.overwrite") : t("save_slots.create"))
+            : (hasSave ? t("save_slots.load") : t("save_slots.empty"));
         const slotStateClass = hasSave ? "filled" : "empty";
         const unavailableClass = !hasSave && saveSlotMode === "load" ? " unavailable" : "";
         const transitionClass = recentlyChangedSlotIndex === index ? " just-updated" : "";
 
         const detailHtml = hasSave ? `
-            <span class="save-slot-location">${escapeHtml(summary.location || "Unknown Location")}</span>
-            <span class="save-slot-meta">Saved ${escapeHtml(formatSavedAt(save.savedAt))}</span>
+            <span class="save-slot-location">${escapeHtml(summary.location || t("save_slots.unknown_location"))}</span>
+            <span class="save-slot-meta">${t("save_slots.saved")} ${escapeHtml(formatSavedAt(save.savedAt))}</span>
             <span class="save-slot-stats">
-                <span>${escapeHtml(String(summary.quests_completed || 0))}/${escapeHtml(String(summary.quests_total || 3))} Restored</span>
-                <span>${escapeHtml(formatCount(summary.inventory_count, "item"))}</span>
-                <span>${escapeHtml(formatCount(summary.turn_count, "turn"))}</span>
+                <span>${escapeHtml(String(summary.quests_completed || 0))}/${escapeHtml(String(summary.quests_total || 3))} ${t("save_slots.restored")}</span>
+                <span>${escapeHtml(formatCount(summary.inventory_count, "save_slots.item_singular", "save_slots.item_plural"))}</span>
+                <span>${escapeHtml(formatCount(summary.turn_count, "save_slots.turn_singular", "save_slots.turn_plural"))}</span>
             </span>
         ` : `
-            <span class="save-slot-location">Empty Slot</span>
-            <span class="save-slot-meta">No slot data yet.</span>
+            <span class="save-slot-location">${t("save_slots.empty_slot")}</span>
+            <span class="save-slot-meta">${t("save_slots.no_data")}</span>
         `;
 
         return `
@@ -653,7 +951,7 @@ function renderSaveSlots() {
                 aria-disabled="${!hasSave && saveSlotMode === "load" ? "true" : "false"}"
             >
                 <span class="save-slot-heading">
-                    <span>Slot ${index + 1}</span>
+                    <span>${t("save_slots.slot")} ${index + 1}</span>
                 </span>
                 ${detailHtml}
                 <span class="save-slot-controls">
@@ -670,7 +968,7 @@ function renderSaveSlots() {
                             type="button"
                             data-slot-action="delete"
                             data-save-slot="${index}"
-                        >Delete</button>
+                        >${t("save_slots.delete")}</button>
                     ` : ""}
                 </span>
             </article>
@@ -690,29 +988,29 @@ async function openSaveSlotDialog(mode) {
     if (!saveSlotDialog) return;
     saveSlotMode = mode === "save" ? "save" : "load";
 
-    if (saveSlotKicker) saveSlotKicker.textContent = saveSlotMode === "save" ? "Local Slot Archive" : "Slot Archive";
-    if (saveSlotTitle) saveSlotTitle.textContent = saveSlotMode === "save" ? "Create or Overwrite Slot" : "Load Slot";
+    if (saveSlotKicker) saveSlotKicker.textContent = saveSlotMode === "save" ? t("save_slots.kicker_save") : t("save_slots.kicker_load");
+    if (saveSlotTitle) saveSlotTitle.textContent = saveSlotMode === "save" ? t("save_slots.title_save") : t("save_slots.title_load");
     if (saveSlotCopy) {
         saveSlotCopy.textContent = saveSlotMode === "save"
-            ? "Create a slot or overwrite an existing slot on this device."
-            : "Choose an existing slot to load.";
+            ? t("save_slots.copy_save")
+            : t("save_slots.copy_load");
     }
 
-    setSaveSlotStatus("Opening slot archive...");
+    setSaveSlotStatus(t("save_slots.opening"));
     saveSlotDialog.classList.remove("hidden");
     try {
         await refreshSaveSlots();
         renderSaveSlots();
         setSaveSlotStatus(
             saveSlotMode === "save"
-                ? "Your progress will be stored in a local save file."
-                : (hasAnySave() ? "Select a slot." : "No slots have been created yet."),
+                ? t("save_slots.save_hint")
+                : (hasAnySave() ? t("save_slots.load_hint") : t("save_slots.no_saves")),
             saveSlotMode === "load" && !hasAnySave()
         );
     } catch (err) {
         console.error("Save slots failed:", err);
         renderSaveSlots();
-        setSaveSlotStatus("Slot archive could not be opened.", true);
+        setSaveSlotStatus(t("save_slots.error_open"), true);
     }
 
     const firstSlot = saveSlotList ? saveSlotList.querySelector("[data-slot-action]") : null;
@@ -759,6 +1057,9 @@ function applyLoadedSave(uiState, state, save, slotIndex) {
     resetClientViewForNewAdventure();
     renderSavedTranscript(state);
 
+    titleScreenDismissed = true;
+    if (titleScreen) titleScreen.classList.add("hidden");
+    stopTitleParticles();
     startScreenDismissed = true;
     if (startScreen) startScreen.classList.add("hidden");
     stopStartParticles();
@@ -780,7 +1081,7 @@ function applyLoadedSave(uiState, state, save, slotIndex) {
         if (endPageCard) endPageCard.remove();
     }
 
-    addMessage(`Loaded Slot ${slotIndex + 1}.`, "mood");
+    addMessage(`${t("save_slots.loaded_msg")} ${slotIndex + 1}.`, "mood");
     activeSaveSlotIndex = slotIndex;
     setUnsavedProgress(false);
     commandInput.focus();
@@ -788,23 +1089,23 @@ function applyLoadedSave(uiState, state, save, slotIndex) {
 
 async function saveCurrentToSlot(slotIndex) {
     if (isWaiting) {
-        setSaveSlotStatus("Wait until the current response finishes before saving.", true);
+        setSaveSlotStatus(t("save_slots.wait_for_response"), true);
         return;
     }
 
     const existingSave = saveSlots[slotIndex];
     if (existingSave) {
         const confirmed = await requestConfirmation({
-            title: "Overwrite Slot?",
-            message: `Overwrite Slot ${slotIndex + 1} with your current progress?`,
-            confirmLabel: "Overwrite",
+            title: t("save_slots.confirm_overwrite_title"),
+            message: t("save_slots.confirm_overwrite_msg", { n: slotIndex + 1 }),
+            confirmLabel: t("save_slots.overwrite"),
             danger: true,
         });
         if (!confirmed) return;
     }
 
     saveSlotBusy = true;
-    setSaveSlotStatus(`Saving to Slot ${slotIndex + 1}...`);
+    setSaveSlotStatus(`${t("save_slots.saving_to")} ${slotIndex + 1}...`);
 
     try {
         const resp = await fetch(`/api/save/slots/${slotIndex}`, { method: "POST" });
@@ -820,12 +1121,12 @@ async function saveCurrentToSlot(slotIndex) {
                 renderSaveSlots();
             }
         }, 700);
-        setSaveSlotStatus(`Slot ${slotIndex + 1} saved on this device.`);
+        setSaveSlotStatus(`${t("save_slots.slot")} ${slotIndex + 1} ${t("save_slots.saved_msg")}`);
         activeSaveSlotIndex = slotIndex;
         setUnsavedProgress(false);
     } catch (err) {
         console.error("Slot save failed:", err);
-        setSaveSlotStatus("Slot could not be saved. Please try again.", true);
+        setSaveSlotStatus(t("save_slots.error_save"), true);
     } finally {
         saveSlotBusy = false;
     }
@@ -834,12 +1135,12 @@ async function saveCurrentToSlot(slotIndex) {
 async function loadSaveFromSlot(slotIndex) {
     const save = saveSlots[slotIndex];
     if (!save) {
-        setSaveSlotStatus("This slot is empty.", true);
+        setSaveSlotStatus(t("save_slots.error_empty"), true);
         return;
     }
 
     saveSlotBusy = true;
-    setSaveSlotStatus(`Loading Slot ${slotIndex + 1}...`);
+    setSaveSlotStatus(`${t("save_slots.loading_slot")} ${slotIndex + 1}...`);
 
     try {
         const resp = await fetch("/api/save/import", {
@@ -854,7 +1155,7 @@ async function loadSaveFromSlot(slotIndex) {
         applyLoadedSave(payload.ui_state, payload.state, payload.save || save, slotIndex);
     } catch (err) {
         console.error("Load failed:", err);
-        setSaveSlotStatus("This slot could not be loaded.", true);
+        setSaveSlotStatus(t("save_slots.error_load"), true);
     } finally {
         saveSlotBusy = false;
         renderSaveSlots();
@@ -864,20 +1165,20 @@ async function loadSaveFromSlot(slotIndex) {
 async function deleteSaveSlot(slotIndex) {
     const save = saveSlots[slotIndex];
     if (!save) {
-        setSaveSlotStatus("This slot is already empty.", true);
+        setSaveSlotStatus(t("save_slots.error_empty"), true);
         return;
     }
 
     const confirmed = await requestConfirmation({
-        title: "Delete Slot?",
-        message: `Delete Slot ${slotIndex + 1}? This slot cannot be restored after deletion.`,
-        confirmLabel: "Delete",
+        title: t("save_slots.confirm_delete_title"),
+        message: t("save_slots.confirm_delete_msg", { n: slotIndex + 1 }),
+        confirmLabel: t("save_slots.delete"),
         danger: true,
     });
     if (!confirmed) return;
 
     saveSlotBusy = true;
-    setSaveSlotStatus(`Deleting Slot ${slotIndex + 1}...`);
+    setSaveSlotStatus(`${t("save_slots.deleting_slot")} ${slotIndex + 1}...`);
 
     try {
         const resp = await fetch(`/api/save/slots/${slotIndex}`, { method: "DELETE" });
@@ -890,10 +1191,10 @@ async function deleteSaveSlot(slotIndex) {
             if (startScreenDismissed) setUnsavedProgress(true);
         }
         renderSaveSlots();
-        setSaveSlotStatus(`Slot ${slotIndex + 1} deleted.`);
+        setSaveSlotStatus(`${t("save_slots.slot")} ${slotIndex + 1} ${t("save_slots.deleted_msg")}`);
     } catch (err) {
         console.error("Delete failed:", err);
-        setSaveSlotStatus("Delete failed. Please try again.", true);
+        setSaveSlotStatus(t("save_slots.error_delete"), true);
     } finally {
         saveSlotBusy = false;
     }
@@ -980,21 +1281,21 @@ function renderGalleryArtworkPage(page) {
                 </div>
             </div>
             <div class="gallery-copy-panel">
-                <p class="gallery-kicker">Artwork ${page.page_number} of ${page.page_total}</p>
+                <p class="gallery-kicker">${t("gallery.artwork")} ${page.page_number} ${t("gallery.page_of")} ${page.page_total}</p>
                 <h2>${escapeHtml(page.artwork_title)}</h2>
-                <p class="gallery-byline">by ${escapeHtml(page.artist_name)}</p>
+                <p class="gallery-byline">${t("gallery.by")} ${escapeHtml(page.artist_name)}</p>
                 ${meta ? `<p class="gallery-meta">${escapeHtml(meta)}</p>` : ""}
                 <div class="gallery-copy-frame" tabindex="0">
                     <section class="gallery-section">
-                        <h3>Artwork</h3>
+                        <h3>${t("gallery.artwork")}</h3>
                         ${renderGalleryParagraphs(page.artwork_intro)}
                     </section>
                     <section class="gallery-section">
-                        <h3>The Artist</h3>
+                        <h3>${t("gallery.the_artist")}</h3>
                         ${renderGalleryParagraphs(page.artist_intro)}
                     </section>
                     <section class="gallery-section">
-                        <h3>Your Journey Together</h3>
+                        <h3>${t("gallery.your_journey")}</h3>
                         ${renderGalleryParagraphs(page.journey_story)}
                     </section>
                 </div>
@@ -1020,7 +1321,7 @@ function renderGalleryIndicator() {
             class="gallery-dot${index === galleryPageIndex ? " active" : ""}"
             type="button"
             data-gallery-index="${index}"
-            aria-label="Go to gallery page ${index + 1}"
+            aria-label="${t("gallery.go_to_page")} ${index + 1}"
             ${index === galleryPageIndex ? 'aria-current="page"' : ""}
         ></button>
     `).join("");
@@ -1083,8 +1384,8 @@ function renderGalleryPage(options = {}) {
         setGalleryTheme("museum");
         galleryPage.innerHTML = `
             <article class="gallery-card gallery-cover-card">
-                <p class="gallery-kicker">Restoration Gallery</p>
-                <h2>Opening the gallery...</h2>
+                <p class="gallery-kicker">${t("gallery.title")}</p>
+                <h2>${t("gallery.loading")}</h2>
             </article>
         `;
         if (galleryPrevBtn) galleryPrevBtn.disabled = true;
@@ -1122,12 +1423,14 @@ function setGalleryPage(index) {
 }
 
 async function loadGalleryPages() {
-    if (galleryPages.length || galleryIsLoading) return;
+    if (galleryIsLoading) return;
+    galleryPages = [];  // Reset so language switch triggers reload
     galleryIsLoading = true;
     renderGalleryPage();
 
     try {
-        const resp = await fetch("/api/gallery");
+        const currentLang = (settingsData && settingsData.language && settingsData.language.current) || localStorage.getItem("cursed_canvas_lang") || "en";
+        const resp = await fetch("/api/gallery?lang=" + encodeURIComponent(currentLang));
         if (!resp.ok) throw new Error("Gallery request failed");
         const payload = await resp.json();
         galleryPages = buildGalleryPages(payload);
@@ -1135,9 +1438,9 @@ async function loadGalleryPages() {
         console.error("Gallery load failed:", err);
         galleryPages = [{
             type: "outro",
-            kicker: "Gallery Unavailable",
-            title: "The gallery doors did not open",
-            body: ["The restoration records could not be loaded. Please try again after the server is ready."]
+            kicker: t("gallery.unavailable_kicker"),
+            title: t("gallery.unavailable_title"),
+            body: [t("gallery.unavailable_body")]
         }];
     } finally {
         galleryIsLoading = false;
@@ -1190,13 +1493,15 @@ function setModeButtonsActive(mode) {
         btn.classList.toggle("active", btn.dataset.mode === currentMode);
     });
     const selectedOption = SETTINGS_MODEL_OPTIONS.find((option) => option.mode === currentMode) || SETTINGS_MODEL_OPTIONS[0];
-    if (modelProviderValue) modelProviderValue.textContent = selectedOption.label;
+    if (modelProviderValue) modelProviderValue.textContent = t(selectedOption.labelKey);
     if (deepseekSettingsPanel) deepseekSettingsPanel.classList.toggle("hidden", currentMode !== "api");
     if (localModelSettingsPanel) localModelSettingsPanel.classList.toggle("hidden", currentMode !== "local");
 }
 
 function setLanguageDisplay() {
-    if (languageValue) languageValue.textContent = SETTINGS_LANGUAGES[0];
+    if (!languageValue) return;
+    const current = settingsData && settingsData.language && settingsData.language.current ? settingsData.language.current : "en";
+    languageValue.textContent = t("lang_label") || LANG_LABELS[current] || current;
 }
 
 function setPersonalApiExpanded(expanded) {
@@ -1215,8 +1520,8 @@ function updateExperienceSettings(deepseek) {
     }
     if (experienceServiceDetail) {
         experienceServiceDetail.textContent = experienceAvailable
-            ? "The remote experience service is available."
-            : "Experience mode is unavailable. Use a personal DeepSeek API key.";
+            ? t("settings.experience_detail_online")
+            : t("settings.experience_detail_offline");
         experienceServiceDetail.classList.toggle("warning", !experienceAvailable);
     }
     if (experienceUnlockInput) experienceUnlockInput.disabled = !experienceAvailable;
@@ -1227,18 +1532,18 @@ function updateExperienceSettings(deepseek) {
     if (experienceTokenBar) experienceTokenBar.style.width = `${percent}%`;
     if (!experienceTokenNote) return;
     if (!experienceAvailable) {
-        experienceTokenNote.textContent = deepseek.experience_status_detail || "Experience service is offline.";
+        experienceTokenNote.textContent = deepseek.experience_status_detail || t("settings.experience_detail_offline");
         experienceTokenNote.classList.add("warning");
     } else if (deepseek.experience_unlimited) {
-        experienceTokenNote.textContent = "Experience mode is unlocked for this visit.";
+        experienceTokenNote.textContent = t("settings.experience_unlocked");
         experienceTokenNote.classList.remove("warning");
     } else {
         const remainingTokens = Number(deepseek.experience_remaining_tokens ?? 0);
         const tokenLimit = Number(deepseek.experience_token_limit ?? 0);
         if (tokenLimit > 0) {
-            experienceTokenNote.textContent = `Trial pool: ${remainingTokens.toLocaleString()} / ${tokenLimit.toLocaleString()} tokens remaining. It does not refill.`;
+            experienceTokenNote.textContent = t("settings.experience_token_pool", { remaining: remainingTokens.toLocaleString(), limit: tokenLimit.toLocaleString() });
         } else {
-            experienceTokenNote.textContent = "Experience mode has no trial tokens configured.";
+            experienceTokenNote.textContent = t("settings.experience_no_tokens");
         }
         experienceTokenNote.classList.toggle("warning", percent <= 10);
     }
@@ -1251,17 +1556,17 @@ function updatePersonalApiSettings(deepseek) {
     personalApiKeyInput.dataset.maskedValue = maskedKey;
     personalApiKeyInput.value = maskedKey;
     personalApiKeyInput.placeholder = deepseek.personal_configured
-        ? "Paste a new DeepSeek API Key"
-        : "Enter your DeepSeek API Key";
+        ? t("settings.personal_key_placeholder_paste")
+        : t("settings.personal_key_placeholder");
     if (deepseek.personal_configured) {
         const source = deepseek.personal_key_source === "environment" ? "environment" : "settings";
-        personalApiHelp.textContent = `API key loaded from ${source}. Only the first and last four characters are shown.`;
+        personalApiHelp.textContent = t("settings.personal_key_loaded", { source: source });
         personalApiHelp.classList.remove("warning");
     } else if (!deepseek.experience_available) {
-        personalApiHelp.textContent = "Experience mode is offline. Enter your DeepSeek API Key to use online AI.";
+        personalApiHelp.textContent = t("settings.personal_key_help_offline");
         personalApiHelp.classList.add("warning");
     } else {
-        personalApiHelp.textContent = "No API key is configured. Enter your DeepSeek API Key here.";
+        personalApiHelp.textContent = t("settings.personal_key_help");
         personalApiHelp.classList.add("warning");
     }
 }
@@ -1276,16 +1581,16 @@ function updateLocalModelSettingsStatus(data) {
     localModelDot.classList.remove("online", "loading", "offline");
     if (isReady) {
         localModelDot.classList.add("online");
-        localModelStatus.textContent = "Ready";
-        localModelDetail.textContent = "The local model is available for offline play.";
+        localModelStatus.textContent = t("settings.local_model_ready");
+        localModelDetail.textContent = t("settings.local_model_ready_detail");
     } else if (isLoading) {
         localModelDot.classList.add("loading");
-        localModelStatus.textContent = "Loading";
-        localModelDetail.textContent = "The local model is prewarming in the background. You can keep playing while it finishes.";
+        localModelStatus.textContent = t("settings.local_model_loading");
+        localModelDetail.textContent = t("settings.local_model_loading_detail");
     } else {
         localModelDot.classList.add("offline");
-        localModelStatus.textContent = "Unavailable";
-        localModelDetail.textContent = "The local model is not ready yet. It may become available after background prewarming finishes.";
+        localModelStatus.textContent = t("settings.local_model_unavailable");
+        localModelDetail.textContent = t("settings.local_model_unavailable_detail");
     }
 }
 
@@ -1310,7 +1615,7 @@ async function loadSettings(silent = false) {
         return data;
     } catch (err) {
         console.error("Settings load failed:", err);
-        if (!silent) setSettingsStatus("Settings could not be loaded.", "error");
+        if (!silent) setSettingsStatus(t("errors.settings_load"), "error");
     }
     return null;
 }
@@ -1324,7 +1629,7 @@ async function postSettings(payload) {
     const data = await resp.json();
     if (!resp.ok) {
         if (data && data.deepseek) updateSettingsUi(data);
-        throw new Error(data.error || "Settings update failed");
+        throw new Error(data.error || t("errors.settings_update"));
     }
     updateSettingsUi(data);
     updateModelStatus(data);
@@ -1356,7 +1661,7 @@ async function switchModelMode(mode) {
     } catch (err) {
         console.error("Mode switch failed:", err);
         setModeButtonsActive(previousMode);
-        setSettingsStatus("Model switch failed.", "error");
+        setSettingsStatus(t("errors.mode_switch"), "error");
         return null;
     } finally {
         document.querySelectorAll(`[data-mode="${mode}"]`).forEach((btn) => {
@@ -1371,18 +1676,44 @@ function cycleSettingsModel(direction) {
     switchModelMode(SETTINGS_MODEL_OPTIONS[nextIndex].mode);
 }
 
-async function openSettings() {
+async function openSettings(source = "menu") {
+    settingsReturnTarget = source === "game" ? "game" : "menu";
+    const settingsThemeWorld = settingsReturnTarget === "game" ? currentWorld : "museum";
     showStartStatus("");
-    if (startScreen) startScreen.dataset.galleryWorld = "museum";
-    setStartParticleTheme("museum");
+    if (startScreen) startScreen.dataset.galleryWorld = settingsThemeWorld;
+    setStartParticleTheme(settingsThemeWorld);
+    if (settingsReturnTarget === "game") {
+        gameInputWasEnabledBeforeSettings = commandInput && !commandInput.disabled;
+        setGameInputEnabled(false);
+        if (startScreen) startScreen.classList.remove("hidden");
+        startStartParticles();
+    }
     showStartView("settings");
     if (settingsView) settingsView.focus();
     await loadSettings();
 }
 
 function closeSettings() {
-    showStartView("menu");
     setSettingsStatus("");
+    if (settingsReturnTarget === "game") {
+        showStartView("menu");
+        if (startScreen) startScreen.classList.add("hidden");
+        stopTitleParticles();
+        stopStartParticles();
+        if (gameInputWasEnabledBeforeSettings) {
+            if (isWaiting) {
+                commandInput.disabled = false;
+                sendBtn.disabled = true;
+            } else {
+                setGameInputEnabled(true);
+            }
+        }
+        if (gameSettingsBtn) gameSettingsBtn.focus();
+        settingsReturnTarget = "menu";
+        gameInputWasEnabledBeforeSettings = false;
+        return;
+    }
+    showStartView("menu");
     if (settingsBtn) settingsBtn.focus();
 }
 
@@ -1390,7 +1721,7 @@ async function selectDeepSeekApiMode(apiMode) {
     if (settingsBusy) return;
     if (apiMode === "experience" && settingsData && settingsData.deepseek && !settingsData.deepseek.experience_available) {
         setPersonalApiExpanded(true);
-        setSettingsStatus("Experience mode is offline. Use a personal API key.", "error");
+        setSettingsStatus(t("errors.experience_offline"), "error");
         if (personalApiKeyInput) personalApiKeyInput.focus();
         return;
     }
@@ -1398,10 +1729,10 @@ async function selectDeepSeekApiMode(apiMode) {
     try {
         await postSettings({ api_mode: apiMode });
         await switchModelMode("api");
-        setSettingsStatus(apiMode === "personal" ? "Personal API selected." : "Experience mode selected.", "success");
+        setSettingsStatus(apiMode === "personal" ? t("settings.api_mode_personal_selected") : t("settings.api_mode_experience_selected"), "success");
     } catch (err) {
         console.error("DeepSeek mode update failed:", err);
-        setSettingsStatus(err.message || "DeepSeek mode could not be updated.", "error");
+        setSettingsStatus(err.message || t("errors.deepseek_update"), "error");
     } finally {
         settingsBusy = false;
     }
@@ -1420,10 +1751,10 @@ async function savePersonalApiKey() {
     try {
         await postSettings(payload);
         await switchModelMode("api");
-        setSettingsStatus(rawKey && rawKey !== maskedKey ? "Personal API key saved." : "Personal API selected.", "success");
+        setSettingsStatus(rawKey && rawKey !== maskedKey ? t("settings.api_key_saved") : t("settings.api_mode_personal_selected"), "success");
     } catch (err) {
         console.error("Personal API save failed:", err);
-        setSettingsStatus(err.message || "Personal API could not be saved.", "error");
+        setSettingsStatus(err.message || t("errors.personal_api_save"), "error");
     } finally {
         settingsBusy = false;
     }
@@ -1433,7 +1764,7 @@ async function unlockExperienceMode() {
     if (!experienceUnlockInput || settingsBusy) return;
     const unlockKey = experienceUnlockInput.value.trim();
     if (!unlockKey) {
-        setSettingsStatus("Enter the author unlock key first.", "error");
+        setSettingsStatus(t("errors.no_unlock_key"), "error");
         experienceUnlockInput.focus();
         return;
     }
@@ -1443,25 +1774,17 @@ async function unlockExperienceMode() {
         await postSettings({ api_mode: "experience", unlock_key: unlockKey });
         await switchModelMode("api");
         experienceUnlockInput.value = "";
-        setSettingsStatus("Experience mode unlocked.", "success");
+        setSettingsStatus(t("settings.experience_unlock_success"), "success");
     } catch (err) {
         console.error("Experience unlock failed:", err);
-        setSettingsStatus(err.message || "Unlock key was not accepted.", "error");
+        setSettingsStatus(err.message || t("errors.unlock_fail"), "error");
     } finally {
         settingsBusy = false;
     }
 }
 
 function addOpeningMessage() {
-    addMessage(
-        "The museum waits in moonlit silence. The paintings are alive, and three worlds shimmer before you: " +
-        "Starry Night, The Great Wave, and Impression, Sunrise.\n\n" +
-        "How to play:\n" +
-        "• Actions: wrap in parentheses, e.g. (look around), (take lantern), (enter starry night)\n" +
-        "• Dialogue: just type, e.g. Where is the lantern? Tell me about the curse.\n\n" +
-        "Use the quick action buttons below for common actions.",
-        "narration"
-    );
+    addMessage(t("messages.opening"), "narration");
 }
 
 function resetClientViewForNewAdventure() {
@@ -1472,13 +1795,13 @@ function resetClientViewForNewAdventure() {
     dynamicWorldOrder = [];
     gameEndingTriggered = false;
     document.body.dataset.world = currentWorld;
-    locationBadge.textContent = "Museum";
-    locationName.textContent = "The Enchanted Museum";
-    locationDesc.textContent = "A grand, moonlit gallery with marble floors.";
+    locationBadge.textContent = t("world_names.museum");
+    locationName.textContent = t("world_names.museum");
+    locationDesc.textContent = "";
     exitsList.innerHTML = "";
-    inventoryList.innerHTML = '<li class="empty-inv">Empty</li>';
+    inventoryList.innerHTML = `<li class="empty-inv">${t("side_panel.inventory_empty")}</li>`;
     if (inventorySections) inventorySections.innerHTML = "";
-    if (inventoryStatus) inventoryStatus.textContent = "Your inventory is empty.";
+    if (inventoryStatus) inventoryStatus.textContent = t("inventory.empty_status");
     if (inventoryDialog) inventoryDialog.classList.add("hidden");
     document.querySelectorAll(".quest-status").forEach((status) => {
         status.textContent = "\u25CB";
@@ -1494,6 +1817,9 @@ function resetClientViewForNewAdventure() {
 
 function enterGameFromIntro() {
     if (startScreenDismissed || !introStory || !introStory.classList.contains("active")) return;
+    titleScreenDismissed = true;
+    if (titleScreen) titleScreen.classList.add("hidden");
+    stopTitleParticles();
     startScreenDismissed = true;
     if (startScreen) {
         startScreen.classList.add("hidden");
@@ -1508,14 +1834,41 @@ function enterGameFromIntro() {
 
 function showMainMenuOverlay() {
     if (!startScreen) return;
+    titleScreenDismissed = true;
+    if (titleScreen) titleScreen.classList.add("hidden");
+    stopTitleParticles();
+
+    // Reset bridge overlay
+    const bridgeTitle = document.getElementById("transition-title");
+    if (bridgeTitle) {
+        bridgeTitle.classList.add("hidden");
+        bridgeTitle.classList.remove("animate");
+        bridgeTitle.style.transform = "";
+    }
+
     startScreenDismissed = false;
     if (inventoryDialog) inventoryDialog.classList.add("hidden");
     currentWorld = "museum";
     document.body.dataset.world = currentWorld;
+    startScreen.dataset.galleryWorld = "museum";
+    setStartParticleTheme("museum");
     setParticleWorld(currentWorld);
     showStartView("menu");
     showStartStatus("");
-    startScreen.classList.remove("hidden");
+
+    // Show start screen elements immediately (no transition needed when returning from game)
+    const startMenuKicker = document.querySelector("#start-menu .start-kicker");
+    const startMenuTitle = document.querySelector("#start-menu .start-title");
+    if (startMenuKicker) { startMenuKicker.classList.add("visible"); startMenuKicker.style.opacity = "1"; }
+    if (startMenuTitle) { startMenuTitle.classList.add("visible"); startMenuTitle.style.opacity = "1"; }
+    document.querySelectorAll("#start-menu .start-btn").forEach(function(btn) {
+        btn.classList.add("revealed");
+        btn.style.animationDelay = "0s";
+    });
+
+    startScreen.classList.remove("hidden", "entering", "show");
+    startScreen.style.opacity = "1";
+    if (startParticleCanvas) { startParticleCanvas.style.opacity = "1"; startParticleCanvas.style.transition = ""; }
     startStartParticles();
     setGameInputEnabled(false);
     if (newAdventureBtn) newAdventureBtn.focus();
@@ -1543,7 +1896,7 @@ function returnToMainMenuFromGame() {
 async function beginNewAdventure() {
     if (!newAdventureBtn) return;
     newAdventureBtn.disabled = true;
-    showStartStatus("Starting a new adventure...");
+    showStartStatus(t("start.starting_adventure"));
 
     try {
         await fetch("/api/reset", { method: "POST" });
@@ -1557,6 +1910,13 @@ async function beginNewAdventure() {
     showStartView("intro");
     newAdventureBtn.disabled = false;
     if (introStory) introStory.focus();
+}
+
+if (titleScreen) {
+    // Click or tap on title screen dismisses it
+    titleScreen.addEventListener("click", () => {
+        if (!titleScreenDismissed) dismissTitleScreen();
+    });
 }
 
 if (startScreen) {
@@ -1628,15 +1988,29 @@ if (galleryIndicator) {
 
 if (languagePrevBtn) {
     languagePrevBtn.addEventListener("click", () => {
-        setLanguageDisplay();
-        setSettingsStatus("Only English is available in this version.", "success");
+        const available = settingsData && settingsData.language && settingsData.language.available ? settingsData.language.available : ["en"];
+        if (available.length <= 1) {
+            setSettingsStatus(t("settings.only_one_language"), "success");
+            return;
+        }
+        const current = settingsData && settingsData.language && settingsData.language.current ? settingsData.language.current : "en";
+        const idx = available.indexOf(current);
+        const next = available[(idx - 1 + available.length) % available.length];
+        switchLanguage(next);
     });
 }
 
 if (languageNextBtn) {
     languageNextBtn.addEventListener("click", () => {
-        setLanguageDisplay();
-        setSettingsStatus("Only English is available in this version.", "success");
+        const available = settingsData && settingsData.language && settingsData.language.available ? settingsData.language.available : ["en"];
+        if (available.length <= 1) {
+            setSettingsStatus(t("settings.only_one_language"), "success");
+            return;
+        }
+        const current = settingsData && settingsData.language && settingsData.language.current ? settingsData.language.current : "en";
+        const idx = available.indexOf(current);
+        const next = available[(idx + 1) % available.length];
+        switchLanguage(next);
     });
 }
 
@@ -1659,7 +2033,7 @@ if (personalApiToggle) {
             if (hasConfiguredKey) {
                 selectDeepSeekApiMode("personal");
             } else {
-                setSettingsStatus("Personal API fields are available below.", "success");
+                setSettingsStatus(t("settings.personal_api_fields_available"), "success");
             }
             if (personalApiKeyInput) personalApiKeyInput.focus();
             return;
@@ -1667,7 +2041,7 @@ if (personalApiToggle) {
         setPersonalApiExpanded(false);
         if (settingsData && settingsData.deepseek && !settingsData.deepseek.experience_available) {
             setPersonalApiExpanded(true);
-            setSettingsStatus("Experience mode is offline. Personal API is required.", "error");
+            setSettingsStatus(t("errors.experience_offline"), "error");
             if (personalApiKeyInput) personalApiKeyInput.focus();
             return;
         }
@@ -1760,6 +2134,12 @@ window.addEventListener("keydown", (e) => {
             return;
         }
     }
+    // Title screen: any key dismisses it
+    if (!titleScreenDismissed && titleScreen && !titleScreen.classList.contains("hidden")) {
+        e.preventDefault();
+        dismissTitleScreen();
+        return;
+    }
     if (!introStory || !introStory.classList.contains("active") || startScreenDismissed) return;
     e.preventDefault();
     enterGameFromIntro();
@@ -1769,9 +2149,9 @@ if (endGameBtn) {
     endGameBtn.addEventListener("click", async () => {
         if (hasUnsavedProgress) {
             const confirmed = await requestConfirmation({
-                title: "Unsaved Progress",
-                message: "Your current progress has not been saved. Return to the main menu without saving?",
-                confirmLabel: "Return Without Saving",
+                title: t("end_game.unsaved_title"),
+                message: t("end_game.unsaved_message"),
+                confirmLabel: t("end_game.return_without_saving"),
                 danger: true,
             });
             if (confirmed) returnToMainMenuFromGame();
@@ -1783,6 +2163,10 @@ if (endGameBtn) {
 
 if (saveProgressBtn) {
     saveProgressBtn.addEventListener("click", () => openSaveSlotDialog("save"));
+}
+
+if (gameSettingsBtn) {
+    gameSettingsBtn.addEventListener("click", () => openSettings("game"));
 }
 
 if (saveSlotCloseBtn) {
@@ -1849,12 +2233,8 @@ if (confirmEndGameBtn) {
 }
 
 // ── World transition effect ──
-const WORLD_NAMES = {
-    museum: "The Enchanted Museum",
-    starry_night: "Starry Night",
-    great_wave: "The Great Wave",
-    impression_sunrise: "Impression, Sunrise"
-};
+// WORLD_NAMES is a static fallback; prefer t("world_names.*") for i18n-aware display
+const WORLD_NAMES = {};
 
 let transitionInProgress = false;
 
@@ -1879,8 +2259,8 @@ function triggerWorldTransition(newWorldId) {
         worldTransition.classList.remove("hidden");
         worldTransition.className = newWorldId;
 
-        const worldName = WORLD_NAMES[newWorldId] || newWorldId;
-        worldTransition.innerHTML = `<div class="transition-text">Entering ${worldName}...</div>`;
+        const worldName = t("world_names." + newWorldId) || WORLD_NAMES[newWorldId] || newWorldId;
+        worldTransition.innerHTML = `<div class="transition-text">${t("messages.enter_world", {world: worldName})}</div>`;
 
         currentWorld = newWorldId;
         document.body.dataset.world = currentWorld;
@@ -1930,29 +2310,29 @@ function detectMoveTarget(command) {
 // ── Quick action configs per world ──
 const QUICK_ACTIONS = {
     museum: [
-        { label: "Look Around", cmd: "(look around)" },
-        { label: "Enter Starry Night", cmd: "(enter starry night)" },
-        { label: "Enter Great Wave", cmd: "(enter great wave)" },
-        { label: "Enter Sunrise", cmd: "(enter impression sunrise)" },
-        { label: "Help", cmd: "(help)" }
+        { labelKey: "quick_actions.museum.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
+        { labelKey: "quick_actions.museum.enter_starry_night", cmd: { en: "(enter starry night)", zh: "（进入星月夜）" } },
+        { labelKey: "quick_actions.museum.enter_great_wave", cmd: { en: "(enter great wave)", zh: "（进入神奈川冲浪里）" } },
+        { labelKey: "quick_actions.museum.enter_sunrise", cmd: { en: "(enter impression sunrise)", zh: "（进入印象·日出）" } },
+        { labelKey: "quick_actions.museum.help", cmd: { en: "(help)", zh: "（帮助）" } }
     ],
     starry_night: [
-        { label: "Look Around", cmd: "(look around)" },
-        { label: "Inventory", cmd: "__open_inventory__" },
-        { label: "Return to Museum", cmd: "(return to museum)" },
-        { label: "Help", cmd: "(help)" }
+        { labelKey: "quick_actions.starry_night.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
+        { labelKey: "quick_actions.starry_night.inventory", cmd: "__open_inventory__" },
+        { labelKey: "quick_actions.starry_night.return_museum", cmd: { en: "(return to museum)", zh: "（返回博物馆）" } },
+        { labelKey: "quick_actions.starry_night.help", cmd: { en: "(help)", zh: "（帮助）" } }
     ],
     great_wave: [
-        { label: "Look Around", cmd: "(look around)" },
-        { label: "Inventory", cmd: "__open_inventory__" },
-        { label: "Return to Museum", cmd: "(return to museum)" },
-        { label: "Help", cmd: "(help)" }
+        { labelKey: "quick_actions.great_wave.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
+        { labelKey: "quick_actions.great_wave.inventory", cmd: "__open_inventory__" },
+        { labelKey: "quick_actions.great_wave.return_museum", cmd: { en: "(return to museum)", zh: "（返回博物馆）" } },
+        { labelKey: "quick_actions.great_wave.help", cmd: { en: "(help)", zh: "（帮助）" } }
     ],
     impression_sunrise: [
-        { label: "Look Around", cmd: "(look around)" },
-        { label: "Inventory", cmd: "__open_inventory__" },
-        { label: "Return to Museum", cmd: "(return to museum)" },
-        { label: "Help", cmd: "(help)" }
+        { labelKey: "quick_actions.impression_sunrise.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
+        { labelKey: "quick_actions.impression_sunrise.inventory", cmd: "__open_inventory__" },
+        { labelKey: "quick_actions.impression_sunrise.return_museum", cmd: { en: "(return to museum)", zh: "（返回博物馆）" } },
+        { labelKey: "quick_actions.impression_sunrise.help", cmd: { en: "(help)", zh: "（帮助）" } }
     ]
 };
 
@@ -2074,14 +2454,37 @@ function hideTyping() {
 // ══════════════════════════════════════════════════════════════
 
 function updateSidePanel(data) {
+    // --- Refresh current-world UI on language switch (no game-event data) ---
+    if (!data) {
+        const worldDisplayName = t("world_names." + currentWorld);
+        if (worldDisplayName && !worldDisplayName.startsWith("world_names.")) {
+            locationBadge.textContent = worldDisplayName;
+            locationName.textContent = worldDisplayName;
+        }
+        // Re-render inventory with existing detail list (if any)
+        renderInventorySummary(currentWorld);
+        renderInventoryDialog();
+        // Re-apply quest label text
+        document.querySelectorAll(".quest-item span:last-child").forEach(el => {
+            const qId = el.parentElement && el.parentElement.dataset.quest;
+            if (qId) {
+                const label = t("quest_names." + qId);
+                if (label && !label.startsWith("quest_names.")) el.textContent = label;
+            }
+        });
+        return;
+    }
+
     if (data.location_id && data.location && !WORLD_NAMES[data.location_id]) {
         WORLD_NAMES[data.location_id] = data.location;
     }
 
     // Location
     if (data.location) {
-        locationBadge.textContent = data.location;
-        locationName.textContent = data.location;
+        const worldName = data.location_id ? t("world_names." + data.location_id) : data.location;
+        const displayName = worldName !== ("world_names." + data.location_id) ? worldName : data.location;
+        locationBadge.textContent = displayName;
+        locationName.textContent = displayName;
     }
     if (data.location_desc) {
         locationDesc.textContent = data.location_desc;
@@ -2168,15 +2571,24 @@ function updateSidePanel(data) {
     }
 }
 
+function getQuickActionCommand(action) {
+    if (!action) return "";
+    if (action.cmd === "__open_inventory__") return action.cmd;
+    if (typeof action.cmd === "string") return action.cmd;
+    const lang = window.I18N && window.I18N.lang ? window.I18N.lang : "en";
+    return action.cmd[lang] || action.cmd.en || "";
+}
+
 function updateQuickActions(worldId) {
     const actions = QUICK_ACTIONS[worldId] || QUICK_ACTIONS.museum;
     quickActions.innerHTML = "";
     actions.forEach(a => {
         const btn = document.createElement("button");
         btn.className = "quick-btn";
-        btn.textContent = a.label;
-        btn.dataset.cmd = a.cmd;
-        if (a.cmd === "__open_inventory__") {
+        btn.textContent = t(a.labelKey);
+        const command = getQuickActionCommand(a);
+        btn.dataset.cmd = command;
+        if (command === "__open_inventory__") {
             btn.dataset.action = "open-inventory";
         }
         quickActions.appendChild(btn);
@@ -2187,7 +2599,7 @@ function updateQuickActions(worldId) {
 panelToggle.addEventListener("click", () => {
     sidePanel.classList.toggle("collapsed");
     panelToggle.classList.toggle("collapsed");
-    panelToggle.textContent = sidePanel.classList.contains("collapsed") ? "INFO" : "INFO";
+    panelToggle.textContent = sidePanel.classList.contains("collapsed") ? t("game.panel_toggle_collapsed") : t("game.panel_toggle");
 });
 
 // ── Model toggle ──
@@ -2208,17 +2620,17 @@ function updateModelStatus(data) {
 
     if (mode === "api") {
         dotClass = "online";
-        text = "DeepSeek API \u2014 Ready";
+        text = t("model_status.deepseek_ready");
     } else if (mode === "local") {
         if (data.local_ready) {
             dotClass = "online";
-            text = "Local Model \u2014 Ready";
+            text = t("model_status.local_ready");
         } else if (data.local_loading) {
             dotClass = "loading";
-            text = `Local Model \u2014 Loading ${localProgress}%`;
+            text = t("model_status.local_loading", {pct: localProgress});
         } else {
             dotClass = "offline";
-            text = "Local Model \u2014 Unavailable";
+            text = t("model_status.local_unavailable");
         }
     }
 
@@ -2249,7 +2661,7 @@ async function sendCommand(command) {
         if (!resp.ok) {
             const err = await resp.json();
             hideTyping();
-            addMessage("Error: " + (err.error || "Unknown error"), "narration");
+            addMessage(t("messages.connection_error"), "narration");
             return;
         }
 
@@ -2270,10 +2682,10 @@ async function sendCommand(command) {
         // Mood message (instant, no typewriter)
         if (data.mood && data.mood !== "neutral") {
             const moods = {
-                tense: "A tense feeling fills the air...",
-                hopeful: "A sense of hope fills the air...",
-                melancholy: "A quiet sadness settles...",
-                joyful: "A warm joy washes over you..."
+                tense: t("moods.tense"),
+                hopeful: t("moods.hopeful"),
+                melancholy: t("moods.melancholy"),
+                joyful: t("moods.joyful")
             };
             if (moods[data.mood]) {
                 addMessage(moods[data.mood], "mood");
@@ -2296,27 +2708,18 @@ async function sendCommand(command) {
 
         // All quests done but not in museum — show hint
         if (data.all_quests_done && data.location_id !== "museum" && !gameEndingTriggered) {
-            await addMessageTypewriter(
-                "You have successfully restored all paintings! You can return to the museum whenever you're ready. " +
-                "Of course, you're welcome to stay a while longer and chat with the artists.",
-                "narration"
-            );
+            await addMessageTypewriter(t("messages.all_restored_hint"), "narration");
         }
 
         // Game ending: returned to museum with all quests done
         if (data.game_over && data.location_id === "museum" && !gameEndingTriggered) {
             gameEndingTriggered = true;
-            await addMessageTypewriter(
-                "All paintings restored! The museum's magic flows freely. The great doors open — you are free.\n\n" +
-                "You can explore the museum, revisit the paintings to chat with the artists, " +
-                "or click the \"View Your Story\" button on the right to see your adventure summarized.",
-                "narration"
-            );
+            await addMessageTypewriter(t("messages.game_ending"), "narration");
             showEndPageButton();
         }
     } catch (err) {
         hideTyping();
-        addMessage("Connection error. Is the server running?", "narration");
+        addMessage(t("messages.connection_error"), "narration");
         console.error(err);
     } finally {
         isWaiting = false;
@@ -2363,6 +2766,7 @@ function resizeCanvas() {
 
 window.addEventListener("resize", () => {
     resizeCanvas();
+    resizeTitleParticleCanvas();
     resizeStartParticleCanvas();
 });
 resizeCanvas();
@@ -2495,7 +2899,7 @@ async function checkModelStatus() {
 
         // Notify when local model comes online
         if (s.active_mode === "local" && s.local_ready && currentMode === "local") {
-            addMessage("The paintings' spirits awaken — local model is ready.", "mood");
+            addMessage(t("messages.local_model_ready"), "mood");
         }
     } catch (e) { /* server not up yet */ }
 }
@@ -2518,18 +2922,20 @@ function showEndPageButton() {
     card.className = "info-card";
     card.id = "end-page-card";
     card.innerHTML = `
-        <h3>Your Adventure</h3>
+        <h3>${t("messages.your_adventure")}</h3>
         <p style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 10px;">
-            Your journey through The Cursed Canvas is complete. View your story!
+            ${t("messages.view_story_desc")}
         </p>
         <button class="quick-btn" id="end-page-btn" style="width: 100%; padding: 10px;">
-            View Your Story
+            ${t("messages.view_story_btn")}
         </button>
     `;
 
     const sidePanel = document.getElementById("side-panel");
     sidePanel.appendChild(card);
 
+    const currentLang = (settingsData && settingsData.language && settingsData.language.current) || localStorage.getItem("cursed_canvas_lang") || "en";
+    localStorage.setItem("cursed_canvas_lang", currentLang);
     document.getElementById("end-page-btn").addEventListener("click", () => {
         window.location.href = "/ending";
     });
@@ -2540,6 +2946,47 @@ function showEndPageButton() {
 // ══════════════════════════════════════════════════════════════
 
 window.addEventListener("load", async () => {
+    // Language: localStorage is authoritative for persistence across sessions
+    const storedLang = localStorage.getItem("cursed_canvas_lang");
+    let initialLang = storedLang || null;
+    try {
+        const settingsResp = await fetch("/api/settings");
+        if (settingsResp.ok) {
+            const sd = await settingsResp.json();
+            settingsData = sd;
+            // If server has no preference and localStorage does, sync server
+            if (!sd.language || !sd.language.current || sd.language.current === "en") {
+                if (storedLang && storedLang !== "en") {
+                    initialLang = storedLang;
+                    try {
+                        await fetch("/api/language", {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({language: storedLang}),
+                        });
+                    } catch (e) { /* ignore */ }
+                }
+            } else {
+                // Server has a preference — use it, and update localStorage
+                initialLang = sd.language.current;
+                if (sd.language.current !== storedLang) {
+                    localStorage.setItem("cursed_canvas_lang", sd.language.current);
+                }
+            }
+        }
+    } catch (e) { /* ignore */ }
+    if (!initialLang) {
+        initialLang = "en";
+    }
+    try {
+        await initI18N(initialLang);
+    } catch (e) {
+        console.warn("I18N init failed, trying en...", e);
+        try { await initI18N("en"); } catch (e2) { /* ignore */ }
+    }
+    // Apply I18N to HTML immediately after init, before any view rendering
+    if (typeof applyI18N === "function") applyI18N();
+
     await migrateBrowserSaveSlots();
 
     // Check if returning from ending page (existing game state)
@@ -2555,21 +3002,35 @@ window.addEventListener("load", async () => {
     } catch (e) { /* ignore */ }
 
     if (isReturning) {
+        titleScreenDismissed = true;
+        if (titleScreen) titleScreen.classList.add("hidden");
+        stopTitleParticles();
+        // bridge overlay hidden too
+        var bta = document.getElementById("transition-title");
+        if (bta) { bta.classList.add("hidden"); bta.classList.remove("animate"); bta.style.transform = ""; }
         startScreenDismissed = true;
-        if (startScreen) startScreen.classList.add("hidden");
+        if (startScreen) {
+            startScreen.classList.add("hidden");
+            startScreen.classList.remove("entering", "show");
+        }
         stopStartParticles();
         setGameInputEnabled(true);
-        addMessage(
-            "Welcome back! You can continue exploring the museum or revisit the paintings. " +
-            "Thank you for playing The Cursed Canvas!",
-            "narration"
-        );
+        addMessage(t("messages.welcome_back"), "narration");
         gameEndingTriggered = true;
         setUnsavedProgress(true);
         showEndPageButton();
     } else {
-        showStartView("menu");
-        startStartParticles();
+        // Show title screen first, not menu
+        titleScreenDismissed = false;
+        if (titleScreen) {
+            titleScreen.classList.remove("hidden");
+            titleScreen.style.opacity = "1";
+        }
+        // Ensure bridge is hidden and start screen reset
+        var bt2 = document.getElementById("transition-title");
+        if (bt2) { bt2.classList.add("hidden"); bt2.classList.remove("animate"); bt2.style.transform = ""; }
+        if (startScreen) { startScreen.classList.remove("entering", "show"); if (startScreen.classList.contains("hidden")) startScreen.classList.remove("hidden"); startScreen.style.opacity = ""; }
+        startTitleParticles();
         setGameInputEnabled(false);
     }
 
@@ -2589,8 +3050,9 @@ window.addEventListener("load", async () => {
             loadingOverlay.classList.add("hidden");
             setTimeout(() => { if (loadingOverlay.parentNode) loadingOverlay.remove(); }, 500);
         }
-        if (!isReturning && !startScreenDismissed && startMenu && startMenu.classList.contains("active")) {
-            newAdventureBtn.focus();
+        // Update title screen continue prompt with i18n when fading in
+        if (titleContinue && window.I18N && window.I18N.title_screen) {
+            titleContinue.textContent = window.I18N.title_screen.continue_prompt;
         }
     }, 800);
 });
@@ -2609,6 +3071,7 @@ window.addEventListener("beforeunload", () => {
         }
     }
     pollActive = false;
+    stopTitleParticles();
     stopStartParticles();
     if (animFrameId) cancelAnimationFrame(animFrameId);
 });

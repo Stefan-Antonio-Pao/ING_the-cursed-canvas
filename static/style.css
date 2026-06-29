@@ -152,6 +152,263 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     pointer-events: none;
 }
 
+/* ── Title screen (cover screen before main menu) ── */
+
+#title-screen {
+    --title-bg-deep: #070b16;
+    --title-bg-surface: #111628;
+    --title-accent-rgb: 212, 168, 67;
+    --title-secondary-rgb: 74, 139, 194;
+    --title-tertiary-rgb: 123, 94, 167;
+    position: fixed;
+    inset: 0;
+    z-index: 105;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    background: linear-gradient(180deg, var(--title-bg-deep) 0%, var(--title-bg-surface) 100%);
+}
+#title-screen.dismissing {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.6s ease 0.15s;
+}
+#title-screen.hidden {
+    display: none;
+}
+
+#title-screen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(ellipse at 30% 28%, rgba(var(--title-accent-rgb), 0.07) 0%, transparent 48%),
+        radial-gradient(ellipse at 72% 68%, rgba(var(--title-secondary-rgb), 0.06) 0%, transparent 52%),
+        radial-gradient(ellipse at 50% 12%, rgba(var(--title-tertiary-rgb), 0.03) 0%, transparent 42%),
+        radial-gradient(ellipse at 50% 85%, rgba(var(--title-accent-rgb), 0.03) 0%, transparent 55%);
+}
+
+#title-particles-canvas {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+}
+#title-particles-canvas.fading {
+    transition: opacity 0.5s ease;
+    opacity: 0;
+}
+
+.title-screen-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    animation: titleContentFadeIn 1.8s ease-out;
+}
+
+@keyframes titleContentFadeIn {
+    0% { opacity: 0; transform: translateY(18px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+
+.title-kicker {
+    color: var(--accent-blue);
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.24em;
+    margin-bottom: 18px;
+    text-transform: uppercase;
+    opacity: 0;
+    animation: titleKickerReveal 1.4s ease-out 0.4s forwards;
+}
+
+@keyframes titleKickerReveal {
+    0% { opacity: 0; transform: translateY(8px); letter-spacing: 0.4em; }
+    100% { opacity: 1; transform: translateY(0); letter-spacing: 0.24em; }
+}
+
+.title-main {
+    position: relative;
+    color: var(--accent-gold);
+    font-size: clamp(3rem, 8vw, 6.2rem);
+    line-height: 0.95;
+    text-align: center;
+    letter-spacing: 0.04em;
+    margin-bottom: 64px;
+    text-shadow:
+        0 0 22px rgba(212, 168, 67, 0.32),
+        0 0 56px rgba(74, 139, 194, 0.2),
+        0 0 90px rgba(123, 94, 167, 0.12);
+    opacity: 0;
+    animation: titleMainReveal 1.6s ease-out 0.35s forwards,
+               titleMainGlow 4.2s ease-in-out infinite;
+}
+
+.title-main::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    color: transparent;
+    -webkit-text-stroke: 1px rgba(245, 240, 224, 0.18);
+    transform: translate(4px, 4px);
+    z-index: -1;
+}
+
+.title-main::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -22px;
+    width: min(420px, 76vw);
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-gold), var(--accent-blue), transparent);
+    transform: translateX(-50%);
+    box-shadow: 0 0 20px rgba(212, 168, 67, 0.42);
+    animation: titleLine 3.2s ease-in-out infinite;
+}
+
+@keyframes titleMainReveal {
+    0% { opacity: 0; transform: translateY(12px) scale(0.96); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes titleMainGlow {
+    0%, 100% {
+        text-shadow:
+            0 0 18px rgba(212, 168, 67, 0.28),
+            0 0 42px rgba(74, 139, 194, 0.16);
+    }
+    50% {
+        text-shadow:
+            0 0 28px rgba(212, 168, 67, 0.52),
+            0 0 64px rgba(123, 94, 167, 0.24);
+    }
+}
+
+.title-continue {
+    color: var(--text-dim);
+    font-family: var(--font-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.14em;
+    opacity: 0;
+    animation: continueFadeIn 1.2s ease-out 1.0s forwards,
+               continuePulse 2.4s ease-in-out 2.2s infinite;
+    margin-top: 8px;
+}
+.title-continue.hiding {
+    animation: none;
+    transition: opacity 0.25s ease;
+    opacity: 0;
+}
+
+@keyframes continueFadeIn {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 0.45; transform: translateY(0); }
+}
+
+@keyframes continuePulse {
+    0%, 100% { opacity: 0.38; }
+    50% { opacity: 0.85; }
+}
+
+/* ── Bridge overlay — floats title from title screen to start menu position ── */
+
+#transition-title {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+#transition-title.hidden {
+    display: none;
+}
+#transition-title.animate {
+    transition: transform 0.65s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.transition-title-kicker {
+    color: var(--accent-blue);
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    margin-bottom: 14px;
+    text-transform: uppercase;
+    transition: font-size 0.65s cubic-bezier(0.25, 0.1, 0.25, 1),
+                letter-spacing 0.65s cubic-bezier(0.25, 0.1, 0.25, 1),
+                opacity 0.25s ease;
+}
+#transition-title.animate .transition-title-kicker {
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+}
+
+.transition-title-main {
+    color: var(--accent-gold);
+    font-size: clamp(3rem, 8vw, 6.2rem);
+    line-height: 0.95;
+    text-align: center;
+    letter-spacing: 0.04em;
+    text-shadow:
+        0 0 22px rgba(212, 168, 67, 0.32),
+        0 0 56px rgba(74, 139, 194, 0.2);
+    transition: font-size 0.65s cubic-bezier(0.25, 0.1, 0.25, 1),
+                text-shadow 0.65s cubic-bezier(0.25, 0.1, 0.25, 1);
+    margin-bottom: 64px;
+    position: relative;
+}
+#transition-title.animate .transition-title-main {
+    font-size: clamp(2.55rem, 6.6vw, 5rem);
+    text-shadow:
+        0 0 14px rgba(212, 168, 67, 0.24),
+        0 0 34px rgba(74, 139, 194, 0.14);
+}
+
+.transition-title-main::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    color: transparent;
+    -webkit-text-stroke: 1px rgba(245, 240, 224, 0.18);
+    transform: translate(4px, 4px);
+    z-index: -1;
+    transition: transform 0.65s cubic-bezier(0.25, 0.1, 0.25, 1),
+                -webkit-text-stroke 0.65s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+#transition-title.animate .transition-title-main::before {
+    transform: translate(3px, 3px);
+    -webkit-text-stroke: 1px rgba(245, 240, 224, 0.16);
+}
+
+.transition-title-main::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -22px;
+    width: min(420px, 76vw);
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-gold), var(--accent-blue), transparent);
+    transform: translateX(-50%);
+    box-shadow: 0 0 20px rgba(212, 168, 67, 0.42);
+    transition: bottom 0.65s cubic-bezier(0.25, 0.1, 0.25, 1),
+                box-shadow 0.65s cubic-bezier(0.25, 0.1, 0.25, 1),
+                width 0.65s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+#transition-title.animate .transition-title-main::after {
+    bottom: -18px;
+    width: min(360px, 72vw);
+    box-shadow: 0 0 18px rgba(212, 168, 67, 0.38);
+}
+
 /* ── Start screen ── */
 #start-screen {
     --start-bg-deep: #0d0d1a;
@@ -168,6 +425,13 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     padding: 28px;
     background: linear-gradient(180deg, var(--start-bg-deep) 0%, var(--start-bg-surface) 100%);
     transition: opacity 0.5s ease, visibility 0.5s ease, background 0.7s ease;
+}
+#start-screen.entering {
+    opacity: 0;
+}
+#start-screen.entering.show {
+    opacity: 1;
+    transition: opacity 0.35s ease 0.2s;
 }
 
 #start-screen::before {
@@ -244,6 +508,15 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     display: flex;
 }
 
+.start-kicker,
+.start-title {
+    /* hidden while bridge overlay runs; revealed after transition */
+}
+.start-kicker.visible,
+.start-title.visible {
+    animation: fadeIn 0.3s ease both;
+}
+
 .start-kicker {
     color: var(--accent-blue);
     font-family: var(--font-ui);
@@ -251,6 +524,7 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     letter-spacing: 0.18em;
     margin-bottom: 14px;
     text-transform: uppercase;
+    opacity: 0;
 }
 
 .start-title {
@@ -263,7 +537,10 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     margin-bottom: 64px;
     text-shadow: 0 0 18px rgba(212, 168, 67, 0.28),
                  0 0 42px rgba(74, 139, 194, 0.18);
-    animation: titleGlow 3.8s ease-in-out infinite;
+    opacity: 0;
+}
+.start-title.visible {
+    animation: fadeIn 0.3s ease both, titleGlow 3.8s ease-in-out infinite;
 }
 
 .start-title::before {
@@ -323,6 +600,16 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     font-size: 0.98rem;
     padding: 13px 18px;
     transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+    opacity: 0;
+    transform: translateY(8px);
+}
+.start-btn.revealed {
+    animation: buttonReveal 0.45s ease-out forwards;
+}
+
+@keyframes buttonReveal {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 .start-btn:hover,
@@ -848,7 +1135,7 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    background: rgba(22, 33, 62, 0.9);
+    background: var(--bg-card);
     border: 1px solid var(--border-light);
     border-left: 3px solid var(--accent-gold);
     border-radius: 8px;
@@ -881,8 +1168,8 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 }
 
 .settings-back-btn {
-    background: rgba(74, 139, 194, 0.1);
-    border: 0;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--border);
     border-radius: 999px;
     color: var(--text-bright);
     cursor: pointer;
@@ -895,7 +1182,8 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 .settings-back-btn:hover,
 .settings-back-btn:focus-visible {
     color: var(--accent-gold);
-    background: rgba(74, 139, 194, 0.18);
+    background: rgba(255, 255, 255, 0.045);
+    border-color: var(--accent-blue);
     outline: none;
     transform: translateY(-1px);
 }
@@ -938,10 +1226,10 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 }
 
 .settings-section-heading {
-    display: grid;
-    grid-template-columns: minmax(0, 0.7fr) minmax(260px, 1fr);
-    gap: 18px;
-    align-items: start;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
     margin-bottom: 14px;
 }
 
@@ -957,6 +1245,7 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     font-family: var(--font-ui);
     font-size: 0.82rem;
     line-height: 1.55;
+    text-align: left;
 }
 
 .settings-stepper {
@@ -968,8 +1257,9 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 }
 
 .settings-section:first-of-type .settings-stepper {
-    width: min(480px, 100%);
-    margin: 0 auto;
+    width: 100%;
+    max-width: none;
+    margin: 0;
 }
 
 .model-stepper {
@@ -998,7 +1288,7 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 .settings-arrow:focus-visible,
 .settings-action-btn:hover,
 .settings-action-btn:focus-visible {
-    background: rgba(74, 139, 194, 0.1);
+    background: rgba(255, 255, 255, 0.045);
     border-color: var(--accent-blue);
     color: var(--accent-blue);
     outline: none;
@@ -2370,6 +2660,10 @@ body[data-world="impression_sunrise"] .npc-portrait {
 
 /* ── Responsive ── */
 @media (max-width: 860px) {
+    #title-screen { padding: 22px; }
+    .title-main { font-size: clamp(2.4rem, 10vw, 4.5rem); margin-bottom: 48px; }
+    .title-kicker { font-size: 0.7rem; }
+    .title-continue { font-size: 0.76rem; }
     #start-screen { padding: 22px; }
     .start-title { margin-bottom: 52px; }
     .intro-copy { padding: 20px 22px; font-size: 0.94rem; }
@@ -2464,6 +2758,10 @@ body[data-world="impression_sunrise"] .npc-portrait {
 }
 
 @media (max-width: 480px) {
+    #title-screen { padding: 16px; }
+    .title-main { font-size: clamp(2rem, 12vw, 3.5rem); margin-bottom: 36px; }
+    .title-kicker { font-size: 0.66rem; }
+    .title-continue { font-size: 0.72rem; }
     #start-screen { padding: 16px; align-items: flex-start; overflow-y: auto; }
     .start-view { padding-top: 42px; }
     #gallery-view {

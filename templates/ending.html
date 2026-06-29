@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" id="html-root">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The Cursed Canvas — Your Story</title>
+    <title id="page-title">The Cursed Canvas — Your Story</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
@@ -155,38 +155,38 @@
     <canvas id="particles-canvas"></canvas>
 
     <div id="return-bar">
-        <button id="return-btn">← Return to Game</button>
+        <button id="return-btn" data-i18n="end_page.return_button">← Return to Game</button>
     </div>
 
     <div id="story-container">
-        <h1>The Cursed Canvas</h1>
-        <p class="subtitle">Your Adventure, Retold</p>
+        <h1 id="end-title" data-i18n="end_page.title">The Cursed Canvas</h1>
+        <p class="subtitle" data-i18n="end_page.subtitle">Your Adventure, Retold</p>
 
         <div id="story-content">
-            <p class="loading-story">Weaving your story from the threads of adventure...</p>
+            <p class="loading-story" data-i18n="end_page.loading">Weaving your story from the threads of adventure...</p>
         </div>
 
         <div class="credits">
-            <p><strong>The Cursed Canvas</strong></p>
-            <p>A text adventure by Daihong Luo & Xinzhi Bao</p>
-            <p>CPS 3320 — Python Programming, June 2026</p>
-            <p style="margin-top: 12px;">Powered by DeepSeek API &bull; Flask &bull; Vanilla JS</p>
-            <p style="margin-top: 8px; font-style: italic;">"Every painting is a window into another world.<br>You stepped through, and brought the light back."</p>
+            <p><strong data-i18n="end_page.title">The Cursed Canvas</strong></p>
+            <p data-i18n="end_page.credits_line1">A text adventure by Daihong Luo & Xinzhi Bao</p>
+            <p data-i18n="end_page.credits_line2">CPS 3320 — Python Programming, June 2026</p>
+            <p style="margin-top: 12px;" data-i18n="end_page.credits_line3">Powered by DeepSeek API &bull; Flask &bull; Vanilla JS</p>
+            <p style="margin-top: 8px; font-style: italic;" data-i18n="end_page.credits_quote">"Every painting is a window into another world.<br>You stepped through, and brought the light back."</p>
         </div>
 
         <div id="download-bar">
             <div class="download-group">
-                <button id="dl-story-btn">Download Story</button>
+                <button id="dl-story-btn" data-i18n="end_page.download_story">Download Story</button>
                 <select id="story-format">
-                    <option value="image">PNG (Default)</option>
-                    <option value="markdown">Markdown</option>
+                    <option value="image" data-i18n="end_page.format_png">PNG (Default)</option>
+                    <option value="markdown" data-i18n="end_page.format_markdown">Markdown</option>
                 </select>
             </div>
             <div class="download-group">
-                <button id="dl-chat-btn">Download Dialogue Timeline</button>
+                <button id="dl-chat-btn" data-i18n="end_page.download_chat">Download Dialogue Timeline</button>
                 <select id="chat-format">
-                    <option value="image">PNG (Default)</option>
-                    <option value="markdown">Markdown</option>
+                    <option value="image" data-i18n="end_page.format_png">PNG (Default)</option>
+                    <option value="markdown" data-i18n="end_page.format_markdown">Markdown</option>
                 </select>
             </div>
         </div>
@@ -206,7 +206,7 @@
                 chatMarkdown = data.chat_log || "";
                 storyContent.innerHTML = markdownToHtml(storyMarkdown);
             } catch (e) {
-                storyContent.innerHTML = "<p>Failed to load your story. Please try again later.</p>";
+                storyContent.innerHTML = `<p>${window.I18N ? window.I18N.end_page.story_fail : "Failed to load your story. Please try again later."}</p>`;
                 console.error(e);
             }
         }
@@ -264,7 +264,7 @@
                     }
                 }, "image/png");
             } catch (e) {
-                alert("Image download failed. Please try the Markdown option instead.");
+                alert(window.I18N ? window.I18N.end_page.image_download_fail : "Image download failed. Please try the Markdown option instead.");
                 console.error(e);
             } finally {
                 document.body.removeChild(tempDiv);
@@ -291,10 +291,58 @@
 
         document.getElementById("return-btn").addEventListener("click", async () => {
             try {
+                const currentLang = window.I18N ? window.I18N.lang : (localStorage.getItem("cursed_canvas_lang") || "en");
                 await fetch("/api/return", { method: "POST" });
+                await fetch("/api/language", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({language: currentLang}),
+                });
             } catch (e) { /* ignore */ }
             window.location.href = "/";
         });
+
+        async function initEndingI18N() {
+            let lang = "en";
+            try {
+                const resp = await fetch("/api/settings");
+                if (resp.ok) {
+                    const sd = await resp.json();
+                    if (sd.language && sd.language.current) lang = sd.language.current;
+                }
+            } catch(e) {}
+            try {
+                const resp = await fetch(`/api/i18n/${lang}`);
+                if (resp.ok) {
+                    window.I18N = await resp.json();
+                    document.querySelectorAll("[data-i18n]").forEach(el => {
+                        const key = el.getAttribute("data-i18n");
+                        const keys = key.split(".");
+                        let value = window.I18N;
+                        for (const k of keys) { if (value == null) return; value = value[k]; }
+                        if (typeof value === "string") {
+                            if (el.tagName === "OPTION") el.text = value;
+                            else el.textContent = value;
+                        }
+                    });
+                    if (window.I18N.end_page) {
+                        document.title = window.I18N.end_page.title + " — " + window.I18N.end_page.subtitle;
+                    }
+                    const credits = document.querySelector(".credits");
+                    if (credits && window.I18N.end_page) {
+                        const ep = window.I18N.end_page;
+                        credits.innerHTML = `
+                            <p><strong>${ep.title}</strong></p>
+                            <p>${ep.credits_line1}</p>
+                            <p>${ep.credits_line2}</p>
+                            <p style="margin-top: 12px;">${ep.credits_line3}</p>
+                            <p style="margin-top: 8px; font-style: italic;">${ep.credits_quote}</p>
+                        `;
+                    }
+                }
+            } catch(e) { console.warn("I18N init failed for ending page", e); }
+        }
+        initEndingI18N();
 
         loadStory();
     </script>
