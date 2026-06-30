@@ -1,6 +1,6 @@
 {
   "name": "the-cursed-canvas-desktop",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Desktop build wrapper for The Cursed Canvas.",
   "main": "desktop/electron/main.js",
   "private": true,
