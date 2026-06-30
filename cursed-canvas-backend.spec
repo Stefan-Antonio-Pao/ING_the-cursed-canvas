@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_dynamic_libs, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, copy_metadata
 
 
 def _safe_collect(collector, package):
@@ -21,6 +21,12 @@ datas = [
 
 for dist_name in ("numpy", "scipy", "scikit-learn", "joblib", "threadpoolctl"):
     datas += _safe_collect(copy_metadata, dist_name)
+
+# SnowNLP ships non-Python data files (stopwords.txt, *.marshal) that it opens at
+# import time. PyInstaller has no built-in hook for snownlp, so collect them
+# explicitly; otherwise the frozen backend crashes with FileNotFoundError on
+# `snownlp/normal/stopwords.txt` before the game's ImportError fallback can run.
+datas += _safe_collect(collect_data_files, "snownlp")
 
 binaries = []
 for package_name in ("numpy", "scipy", "sklearn"):
@@ -46,6 +52,12 @@ hiddenimports = [
     "transformers.models.phi3",
     "transformers.models.phi3.modeling_phi3",
     "transformers.models.phi3.tokenization_phi3",
+    "snownlp",
+    "snownlp.normal",
+    "snownlp.seg",
+    "snownlp.tag",
+    "snownlp.summary",
+    "snownlp.classification",
 ]
 
 
