@@ -23,3 +23,9 @@ experience_proxy/*.sqlite3-*
 /*_LOG.md
 /localization-analysis.md
 /localization-plan*.md
+/DEBUG_REPORT.md
+/FINAL_FIXES.md
+/IMPLEMENTATION_SUMMARY.md
+/REFACTOR_PLAN.md
+/REFACTOR_TEST_REPORT.md
+/TESTER_GUIDE_ZH_EN.md
