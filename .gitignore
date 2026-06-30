@@ -15,3 +15,11 @@ data/save_slots.json
 *.spec.bak
 experience_proxy/*.sqlite3
 experience_proxy/*.sqlite3-*
+
+# Local agent notes and generated planning drafts
+.claude/
+.agents/logs/
+/task_logs/
+/*_LOG.md
+/localization-analysis.md
+/localization-plan*.md
