@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title id="page-title">The Cursed Canvas</title>
-    <link rel="stylesheet" href="/static/style.css?v=game-settings-fixes-20260629">
+    <link rel="stylesheet" href="/static/style.css?v=quick-actions-order-20260630">
 </head>
 <body data-world="museum">
     <!-- Background layers -->
@@ -66,7 +66,9 @@
         </article>
 
         <article id="settings-view" class="start-view" aria-label="Settings" tabindex="-1">
-            <div class="settings-card">
+            <div class="settings-flow-stage">
+                <button class="onboarding-arrow settings-flow-arrow" id="settings-flow-prev-btn" type="button" aria-label="Previous setup step">&lsaquo;</button>
+                <div class="settings-card">
                 <div class="settings-topbar">
                     <button class="settings-back-btn" id="settings-back-btn" type="button" data-i18n="settings.back">Back</button>
                     <p class="start-kicker" data-i18n="settings.title">Settings</p>
@@ -82,6 +84,19 @@
                         <button class="settings-arrow" id="language-prev-btn" type="button" aria-label="Previous language">&lsaquo;</button>
                         <div class="settings-stepper-value" id="language-value" aria-live="polite">English</div>
                         <button class="settings-arrow" id="language-next-btn" type="button" aria-label="Next language">&rsaquo;</button>
+                    </div>
+
+                    <div class="settings-subsection tutorial-settings-block">
+                        <p class="settings-kicker" data-i18n="settings.tutorial_kicker">Tutorial</p>
+                        <div class="settings-section-heading">
+                            <h2 data-i18n="settings.tutorial_heading">Beginner Tutorial</h2>
+                            <p data-i18n="settings.tutorial_desc">Show a practical guide before the prologue when starting a new adventure.</p>
+                        </div>
+                        <label class="settings-checkbox-row" for="tutorial-enabled-checkbox">
+                            <input id="tutorial-enabled-checkbox" type="checkbox">
+                            <span data-i18n="settings.tutorial_toggle">Enable beginner tutorial</span>
+                        </label>
+                        <p class="settings-note" id="tutorial-preference-note" data-i18n="settings.tutorial_first_time_note">First playthroughs start with this enabled. Later adventures default to off unless you turn it on.</p>
                     </div>
                 </section>
 
@@ -153,7 +168,22 @@
                 </section>
 
                 <p id="settings-status" aria-live="polite"></p>
+                </div>
+                <button class="onboarding-arrow settings-flow-arrow" id="settings-flow-next-btn" type="button" aria-label="Next setup step">&rsaquo;</button>
             </div>
+        </article>
+
+        <article id="tutorial-view" class="start-view" aria-label="Beginner tutorial" tabindex="-1">
+            <div class="tutorial-topbar">
+                <button class="tutorial-back-btn" id="tutorial-back-btn" type="button" data-i18n="tutorial.back">Back</button>
+                <p class="start-kicker" data-i18n="tutorial.kicker">Quick Start</p>
+            </div>
+            <div class="tutorial-stage">
+                <button class="tutorial-arrow" id="tutorial-prev-btn" type="button" aria-label="Previous setup step">&lsaquo;</button>
+                <section id="tutorial-page" aria-live="polite"></section>
+                <button class="tutorial-arrow" id="tutorial-next-btn" type="button" aria-label="Next setup step">&rsaquo;</button>
+            </div>
+            <p class="tutorial-flow-hint" data-i18n="tutorial.flow_hint">Use the right arrow to continue to the prologue.</p>
         </article>
 
         <article id="intro-story" class="start-view" aria-label="Story introduction" tabindex="-1">
@@ -188,12 +218,13 @@
                     <button type="submit" id="send-btn" data-i18n="game.send">Send</button>
                 </form>
                 <div id="quick-actions">
+                    <button class="quick-btn" data-cmd="__open_inventory__" data-action="open-inventory">Inventory</button>
+                    <button class="quick-btn" data-cmd="__open_tutorial__" data-action="open-tutorial">Help</button>
                     <button class="quick-btn" data-cmd="(look around)">Look Around</button>
                     <button class="quick-btn" data-cmd="(enter starry night)">Starry Night</button>
                     <button class="quick-btn" data-cmd="(enter great wave)">Great Wave</button>
                     <button class="quick-btn" data-cmd="(enter impression sunrise)">Sunrise</button>
-                    <button class="quick-btn" data-cmd="(help)">Help</button>
-                <button id="panel-toggle" title="Toggle info panel" class="quick-btn info-toggle-btn" data-i18n="game.panel_toggle">Info Panel</button>
+                    <button id="panel-toggle" title="Toggle info panel" class="quick-btn info-toggle-btn" data-i18n="game.panel_toggle">Info Panel</button>
                 </div>
             </footer>
         </div>
@@ -304,6 +335,20 @@
         </div>
     </div>
 
+    <div id="tutorial-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="tutorial-dialog-title">
+        <div class="save-dialog-card tutorial-dialog-card">
+            <div class="save-dialog-topbar">
+                <div>
+                    <p class="start-kicker" data-i18n="tutorial.kicker">Quick Start</p>
+                    <h2 id="tutorial-dialog-title" data-i18n="tutorial.title">Beginner Tutorial</h2>
+                </div>
+                <button class="save-close-btn" id="tutorial-close-btn" type="button" aria-label="Close tutorial">&times;</button>
+            </div>
+            <p class="save-dialog-copy" data-i18n="tutorial.dialog_copy">Review the core controls and the restoration loop at any time.</p>
+            <div id="tutorial-dialog-content" class="tutorial-dialog-content" aria-live="polite"></div>
+        </div>
+    </div>
+
     <div id="confirm-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <div class="dialog-card">
             <h2 id="confirm-title" data-i18n="confirm.title">Confirm Action</h2>
@@ -372,6 +417,6 @@ function applyI18N() {
     });
 }
 </script>
-    <script src="/static/game.js?v=game-settings-fixes-20260629"></script>
+    <script src="/static/game.js?v=quick-actions-order-20260630"></script>
 </body>
 </html>

@@ -5,7 +5,9 @@
 """
 
 from functools import lru_cache
+import importlib
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,10 @@ def _current_lang():
 
 @lru_cache(maxsize=1)
 def _vader_analyzer():
-    from nltk.sentiment import SentimentIntensityAnalyzer
+    if getattr(sys, "frozen", False):
+        raise RuntimeError("NLTK VADER is disabled in the frozen desktop build.")
+    sentiment_module = importlib.import_module(".".join(["nltk", "sentiment"]))
+    SentimentIntensityAnalyzer = sentiment_module.SentimentIntensityAnalyzer
     return SentimentIntensityAnalyzer()
 
 
@@ -28,7 +33,7 @@ def _vader_analyze(text):
     try:
         score = _vader_analyzer().polarity_scores(text)["compound"]
     except Exception:
-        return "neutral"
+        return _english_keyword_analyze(text)
     if score >= 0.2:
         return "positive"
     if score <= -0.2:
@@ -62,6 +67,26 @@ _CN_POSITIVE = {"好", "太好了", "棒", "感谢", "谢谢", "开心", "喜欢
                 "漂亮", "温暖", "光明", "希望", "成功", "完成", "恢复"}
 _CN_NEGATIVE = {"糟", "糟糕", "害怕", "恐惧", "黑暗", "悲伤", "愤怒", "绝望",
                 "失败", "诅咒", "偷", "丢失", "不安", "困惑", "迷茫"}
+
+_EN_POSITIVE = {
+    "good", "great", "beautiful", "bright", "calm", "hope", "safe", "happy",
+    "thank", "thanks", "love", "restore", "restored", "success", "warm",
+}
+_EN_NEGATIVE = {
+    "bad", "afraid", "fear", "dark", "sad", "angry", "curse", "cursed",
+    "lost", "stolen", "steal", "fail", "failed", "danger", "uneasy",
+}
+
+
+def _english_keyword_analyze(text):
+    words = {part.strip(".,!?;:\"'()[]{}").lower() for part in text.split()}
+    pos = len(words & _EN_POSITIVE)
+    neg = len(words & _EN_NEGATIVE)
+    if pos > neg:
+        return "positive"
+    if neg > pos:
+        return "negative"
+    return "neutral"
 
 
 def _chinese_keyword_analyze(text):

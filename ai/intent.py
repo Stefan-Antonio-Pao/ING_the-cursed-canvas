@@ -1,12 +1,7 @@
 """Intent classifier: TF-IDF + Logistic Regression — i18n-aware."""
 
-import json, os, pickle, logging, numpy as np
+import json, pickle, logging
 from pathlib import Path
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (accuracy_score, precision_score, recall_score,
-                              f1_score, confusion_matrix, classification_report)
 
 from i18n.loader import get_intents
 
@@ -23,9 +18,34 @@ def _model_paths(lang):
     )
 
 
+def _load_sklearn_core():
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.linear_model import LogisticRegression
+    except Exception as exc:
+        raise RuntimeError(f"scikit-learn is unavailable: {exc}") from exc
+    return TfidfVectorizer, LogisticRegression
+
+
+def _load_sklearn_training_tools():
+    try:
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import (
+            accuracy_score, precision_score, recall_score,
+            f1_score, confusion_matrix, classification_report,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"scikit-learn training tools are unavailable: {exc}") from exc
+    return (
+        train_test_split, accuracy_score, precision_score, recall_score,
+        f1_score, confusion_matrix, classification_report,
+    )
+
+
 class IntentClassifier:
     def __init__(self, lang="en"):
         self.lang = lang
+        TfidfVectorizer, LogisticRegression = _load_sklearn_core()
         if lang == "zh":
             self.vectorizer = TfidfVectorizer(
                 analyzer="char_wb", ngram_range=(1, 4),
@@ -57,6 +77,10 @@ class IntentClassifier:
         return texts, labels
 
     def train(self, texts=None, labels=None, test_size=0.2, random_state=42):
+        (
+            train_test_split, accuracy_score, precision_score, recall_score,
+            f1_score, confusion_matrix, classification_report,
+        ) = _load_sklearn_training_tools()
         if texts is None or labels is None:
             texts, labels = self.load_i18n_data()
         X_train, X_test, y_train, y_test = train_test_split(

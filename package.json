@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "desktop:dev": "electron .",
-    "backend:build": "python -m PyInstaller cursed-canvas-backend.spec --noconfirm",
+    "backend:build": "python -m PyInstaller cursed-canvas-backend.spec --noconfirm --clean",
     "desktop:pack": "electron-builder --dir",
     "desktop:dist": "npm run backend:build && electron-builder"
   },

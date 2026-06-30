@@ -57,12 +57,18 @@ def _init_classifier():
         logger.info("English intent classifier loaded.")
     except FileNotFoundError:
         logger.warning("No English classifier found. Run 'python -m ai.intent en' first.")
+    except Exception as exc:
+        _classifier_en = None
+        logger.warning("English intent classifier unavailable. Falling back to keyword rules: %s", exc)
     try:
         _classifier_zh = IntentClassifier(lang="zh")
         _classifier_zh.load()
         logger.info("Chinese intent classifier loaded.")
     except FileNotFoundError:
         logger.warning("No Chinese classifier found. Run 'python -m ai.intent zh' to train.")
+    except Exception as exc:
+        _classifier_zh = None
+        logger.warning("Chinese intent classifier unavailable. Falling back to keyword rules: %s", exc)
     _classifier_ready = True
 
 

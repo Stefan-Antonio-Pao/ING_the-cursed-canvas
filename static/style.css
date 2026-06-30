@@ -1131,8 +1131,26 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     align-items: stretch;
 }
 
+.settings-flow-stage {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+}
+
+#settings-view.onboarding-flow {
+    width: min(1000px, calc(100vw - 96px));
+}
+
+#settings-view.onboarding-flow .settings-flow-stage {
+    grid-template-columns: 46px minmax(0, 1fr) 46px;
+    gap: 14px;
+}
+
 .settings-card {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
     background: var(--bg-card);
@@ -1188,6 +1206,15 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     transform: translateY(-1px);
 }
 
+#settings-view.onboarding-flow .settings-topbar {
+    justify-content: flex-end;
+}
+
+#settings-view.onboarding-flow .settings-back-btn,
+#tutorial-preference-note {
+    display: none;
+}
+
 .settings-section {
     border-top: 1px solid var(--border);
     padding-top: 18px;
@@ -1201,6 +1228,12 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     /*overflow-y: auto;*/
     /*padding-right: 4px;*/
     padding-top: 0;
+}
+
+.settings-subsection {
+    border-top: 1px solid var(--border);
+    margin-top: 18px;
+    padding-top: 18px;
 }
 
 .settings-section:first-of-type::-webkit-scrollbar {
@@ -1519,6 +1552,281 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 .settings-status-row .status-dot.online { background: #6ec87a; }
 .settings-status-row .status-dot.loading { background: #e8c870; animation: pulse 1.5s infinite; }
 .settings-status-row .status-dot.offline { background: var(--accent-red); }
+
+.onboarding-arrow,
+.tutorial-arrow {
+    align-self: center;
+    width: 46px;
+    height: 74px;
+    background: rgba(22, 33, 62, 0.76);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    color: var(--accent-gold);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 2rem;
+    line-height: 1;
+    transition: background 0.24s ease, border-color 0.24s ease, color 0.24s ease, transform 0.24s ease;
+}
+
+.onboarding-arrow:hover,
+.onboarding-arrow:focus-visible,
+.tutorial-arrow:hover,
+.tutorial-arrow:focus-visible {
+    background: rgba(212, 168, 67, 0.12);
+    border-color: var(--accent-gold);
+    color: var(--accent-gold);
+    outline: none;
+    transform: translateY(-1px);
+}
+
+.onboarding-arrow:disabled,
+.tutorial-arrow:disabled {
+    cursor: default;
+    opacity: 0.32;
+    transform: none;
+}
+
+.settings-flow-arrow {
+    display: none;
+}
+
+#settings-view.onboarding-flow .settings-flow-arrow {
+    display: block;
+}
+
+/* Tutorial */
+#tutorial-view {
+    width: min(1000px, calc(100vw - 96px));
+    height: min(780px, calc(100vh - 96px));
+    align-items: stretch;
+}
+
+.tutorial-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.tutorial-topbar .start-kicker {
+    color: var(--accent-blue);
+    letter-spacing: 0;
+    margin-bottom: 0;
+    text-align: right;
+}
+
+.tutorial-back-btn {
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-bright);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 0.82rem;
+    padding: 8px 15px;
+    transition: background 0.24s ease, color 0.24s ease, transform 0.24s ease;
+}
+
+.tutorial-back-btn:hover,
+.tutorial-back-btn:focus-visible {
+    color: var(--accent-gold);
+    background: rgba(255, 255, 255, 0.045);
+    border-color: var(--accent-blue);
+    outline: none;
+    transform: translateY(-1px);
+}
+
+#tutorial-view.onboarding-flow .tutorial-topbar {
+    justify-content: flex-end;
+}
+
+#tutorial-view.onboarding-flow .tutorial-back-btn {
+    display: none;
+}
+
+.tutorial-stage {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr) 46px;
+    align-items: stretch;
+    gap: 14px;
+    overflow: hidden;
+}
+
+#tutorial-page {
+    align-self: stretch;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.tutorial-card {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    overflow: hidden;
+    background: rgba(22, 33, 62, 0.9);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-gold);
+    border-radius: 8px;
+    padding: clamp(20px, 3vw, 34px);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.24);
+    display: flex;
+    flex-direction: column;
+}
+
+.tutorial-kicker {
+    color: var(--accent-blue);
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+}
+
+.tutorial-card h2 {
+    color: var(--accent-gold);
+    font-size: clamp(1.75rem, 4vw, 2.55rem);
+    line-height: 1.12;
+    margin-bottom: 10px;
+    text-shadow: 0 0 22px rgba(212, 168, 67, 0.18);
+}
+
+.tutorial-copy {
+    color: var(--text-primary);
+    font-size: 0.98rem;
+    line-height: 1.65;
+    margin-bottom: 16px;
+}
+
+.tutorial-content-frame {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    background: rgba(74, 139, 194, 0.035);
+    border: 1px solid rgba(74, 139, 194, 0.16);
+    border-radius: 6px;
+    padding: 16px 14px 16px 16px;
+    scrollbar-gutter: stable;
+}
+
+.tutorial-content-frame:focus-visible {
+    outline: 1px solid rgba(74, 139, 194, 0.65);
+    outline-offset: 4px;
+}
+
+.tutorial-content-frame::-webkit-scrollbar {
+    width: 5px;
+}
+
+.tutorial-content-frame::-webkit-scrollbar-thumb {
+    background: var(--border-light);
+    border-radius: 4px;
+}
+
+.tutorial-section {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+}
+
+.tutorial-section:first-child {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.tutorial-section + .tutorial-section {
+    margin-top: 16px;
+}
+
+.tutorial-section h3 {
+    color: var(--accent-blue);
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0;
+    margin-bottom: 9px;
+    text-transform: uppercase;
+}
+
+.tutorial-section p,
+.tutorial-section li {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    line-height: 1.68;
+}
+
+.tutorial-section p + p {
+    margin-top: 10px;
+}
+
+.tutorial-section ul {
+    margin: 10px 0 0 18px;
+}
+
+.tutorial-section li + li {
+    margin-top: 7px;
+}
+
+.tutorial-examples {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.tutorial-example {
+    min-height: 90px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 11px 12px;
+    border: 1px solid rgba(212, 168, 67, 0.28);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.022);
+}
+
+.tutorial-example strong {
+    color: var(--accent-gold);
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+}
+
+.tutorial-example code {
+    color: var(--text-bright);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+}
+
+.tutorial-example span {
+    color: var(--text-dim);
+    font-family: var(--font-ui);
+    font-size: 0.75rem;
+    line-height: 1.45;
+}
+
+.tutorial-flow-hint {
+    display: none;
+    min-height: 22px;
+    color: var(--accent-blue);
+    font-family: var(--font-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
+    margin-top: 14px;
+    text-align: center;
+}
+
+.tutorial-dialog-card {
+    width: min(860px, 100%);
+}
+
+.tutorial-dialog-content .tutorial-content-frame {
+    max-height: min(60vh, 560px);
+}
 
 /* ── Main game container (two-panel) ── */
 #game-container {
@@ -2675,11 +2983,29 @@ body[data-world="impression_sunrise"] .npc-portrait {
         width: 100%;
         max-height: min(820px, calc(100vh - 44px));
     }
+    #tutorial-view {
+        width: 100%;
+        height: min(820px, calc(100vh - 44px));
+    }
+    #settings-view.onboarding-flow {
+        width: 100%;
+    }
+    #settings-view.onboarding-flow .settings-flow-stage,
     .gallery-stage {
         grid-template-columns: 38px minmax(0, 1fr) 38px;
         gap: 8px;
     }
+    .tutorial-stage {
+        grid-template-columns: 38px minmax(0, 1fr) 38px;
+        gap: 8px;
+    }
+    .onboarding-arrow,
     .gallery-arrow {
+        width: 38px;
+        height: 60px;
+        font-size: 1.8rem;
+    }
+    .tutorial-arrow {
         width: 38px;
         height: 60px;
         font-size: 1.8rem;
@@ -2716,6 +3042,10 @@ body[data-world="impression_sunrise"] .npc-portrait {
     }
 
     .inventory-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .tutorial-examples {
         grid-template-columns: 1fr;
     }
 
@@ -2777,6 +3107,12 @@ body[data-world="impression_sunrise"] .npc-portrait {
         max-height: none;
         padding-top: 0;
     }
+    #tutorial-view {
+        width: 100%;
+        height: auto;
+        min-height: calc(100vh - 32px);
+        padding-top: 0;
+    }
     .start-title { font-size: 2.65rem; margin-bottom: 40px; }
     .start-actions { gap: 10px; }
     .start-btn { font-size: 0.92rem; padding: 12px 14px; }
@@ -2794,6 +3130,12 @@ body[data-world="impression_sunrise"] .npc-portrait {
         gap: 6px;
         align-items: stretch;
     }
+    #settings-view.onboarding-flow .settings-flow-stage,
+    .tutorial-stage {
+        grid-template-columns: 32px minmax(0, 1fr) 32px;
+        gap: 6px;
+        align-items: stretch;
+    }
     .gallery-card {
         padding: 16px;
     }
@@ -2806,8 +3148,17 @@ body[data-world="impression_sunrise"] .npc-portrait {
         align-self: center;
         font-size: 1.55rem;
     }
+    .onboarding-arrow,
+    .tutorial-arrow {
+        width: 32px;
+        height: 54px;
+        align-self: center;
+        font-size: 1.55rem;
+    }
     .gallery-body,
-    .gallery-section p {
+    .gallery-section p,
+    .tutorial-section p,
+    .tutorial-section li {
         font-size: 0.88rem;
     }
     #gallery-indicator {
@@ -2819,6 +3170,9 @@ body[data-world="impression_sunrise"] .npc-portrait {
     .dialog-actions { flex-direction: column-reverse; }
     .dialog-btn { width: 100%; }
     .settings-card { padding: 16px; }
+    .tutorial-card { padding: 16px; }
+    .tutorial-card h2 { font-size: 1.35rem; }
+    .tutorial-content-frame { padding: 14px 12px 14px 14px; }
     .settings-stepper {
         grid-template-columns: 38px minmax(0, 1fr) 38px;
     }

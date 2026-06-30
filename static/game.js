@@ -67,6 +67,8 @@ function refreshAllUI(sidePanelData) {
     if (panelToggle) panelToggle.textContent = sidePanel && sidePanel.classList.contains("collapsed") ? t("game.panel_toggle_collapsed") : t("game.panel_toggle");
     if (gameSettingsBtn) gameSettingsBtn.textContent = t("side_panel.settings");
     setLanguageDisplay();
+    updateTutorialSettingsUi();
+    renderTutorialSurfaces();
     updateQuickActions(currentWorld);
     updateSidePanel(sidePanelData || null);
     if (typeof applyI18N === "function") applyI18N();
@@ -120,10 +122,14 @@ const galleryNextBtn = document.getElementById("gallery-next-btn");
 const galleryIndicator = document.getElementById("gallery-indicator");
 const settingsView = document.getElementById("settings-view");
 const settingsBackBtn = document.getElementById("settings-back-btn");
+const settingsFlowPrevBtn = document.getElementById("settings-flow-prev-btn");
+const settingsFlowNextBtn = document.getElementById("settings-flow-next-btn");
 const settingsStatus = document.getElementById("settings-status");
 const languagePrevBtn = document.getElementById("language-prev-btn");
 const languageNextBtn = document.getElementById("language-next-btn");
 const languageValue = document.getElementById("language-value");
+const tutorialEnabledCheckbox = document.getElementById("tutorial-enabled-checkbox");
+const tutorialPreferenceNote = document.getElementById("tutorial-preference-note");
 const modelPrevBtn = document.getElementById("model-prev-btn");
 const modelNextBtn = document.getElementById("model-next-btn");
 const modelProviderValue = document.getElementById("model-provider-value");
@@ -161,6 +167,14 @@ const inventoryDialog = document.getElementById("inventory-dialog");
 const inventorySections = document.getElementById("inventory-sections");
 const inventoryStatus = document.getElementById("inventory-status");
 const inventoryCloseBtn = document.getElementById("inventory-close-btn");
+const tutorialView = document.getElementById("tutorial-view");
+const tutorialBackBtn = document.getElementById("tutorial-back-btn");
+const tutorialPrevBtn = document.getElementById("tutorial-prev-btn");
+const tutorialNextBtn = document.getElementById("tutorial-next-btn");
+const tutorialPage = document.getElementById("tutorial-page");
+const tutorialDialog = document.getElementById("tutorial-dialog");
+const tutorialDialogContent = document.getElementById("tutorial-dialog-content");
+const tutorialCloseBtn = document.getElementById("tutorial-close-btn");
 const endGameBtn = document.getElementById("end-game-btn");
 const endGameDialog = document.getElementById("end-game-dialog");
 const cancelEndGameBtn = document.getElementById("cancel-end-game-btn");
@@ -183,6 +197,10 @@ let settingsData = null;
 let settingsBusy = false;
 let settingsReturnTarget = "menu";
 let gameInputWasEnabledBeforeSettings = false;
+let newAdventureFlowActive = false;
+let newAdventurePrepared = false;
+let newAdventurePreparing = false;
+let tutorialDialogReturnFocus = null;
 let galleryTransitionDirection = "next";
 let galleryTransitionTimer = null;
 let galleryBackdropTimer = null;
@@ -258,6 +276,8 @@ const SETTINGS_MODEL_OPTIONS = [
     { mode: "api", labelKey: "model_status.api_label" },
     { mode: "local", labelKey: "model_status.local_label" },
 ];
+const TUTORIAL_ENABLED_STORAGE_KEY = "theCursedCanvas.tutorialEnabled.v1";
+const TUTORIAL_SEEN_STORAGE_KEY = "theCursedCanvas.tutorialSeen.v1";
 
 // ── Title screen flow ──
 
@@ -535,8 +555,9 @@ function drawStartParticles() {
     const w = window.innerWidth;
     const h = window.innerHeight;
     const t = Date.now() * 0.001;
-    const introActive = introStory && introStory.classList.contains("active");
-    const energy = introActive ? 1.22 : 1;
+    const storyFlowActive = (introStory && introStory.classList.contains("active"))
+        || (tutorialView && tutorialView.classList.contains("active"));
+    const energy = storyFlowActive ? 1.22 : 1;
 
     startParticleCtx.clearRect(0, 0, w, h);
     startParticleCtx.save();
@@ -607,6 +628,7 @@ function showStartView(view) {
     startMenu.classList.toggle("active", view === "menu");
     if (galleryView) galleryView.classList.toggle("active", view === "gallery");
     if (settingsView) settingsView.classList.toggle("active", view === "settings");
+    if (tutorialView) tutorialView.classList.toggle("active", view === "tutorial");
     introStory.classList.toggle("active", view === "intro");
 }
 
@@ -627,6 +649,156 @@ function escapeHtml(value) {
         "\"": "&quot;",
         "'": "&#39;"
     }[char]));
+}
+
+function readStoredBoolean(key) {
+    try {
+        const stored = localStorage.getItem(key);
+        if (stored === "1") return true;
+        if (stored === "0") return false;
+    } catch (err) {
+        console.warn("Stored preference could not be read:", err);
+    }
+    return null;
+}
+
+function writeStoredBoolean(key, value) {
+    try {
+        localStorage.setItem(key, value ? "1" : "0");
+    } catch (err) {
+        console.warn("Stored preference could not be written:", err);
+    }
+}
+
+function hasSeenTutorial() {
+    return readStoredBoolean(TUTORIAL_SEEN_STORAGE_KEY) === true;
+}
+
+function markTutorialSeen() {
+    writeStoredBoolean(TUTORIAL_SEEN_STORAGE_KEY, true);
+}
+
+function getTutorialEnabledPreference() {
+    const storedPreference = readStoredBoolean(TUTORIAL_ENABLED_STORAGE_KEY);
+    if (storedPreference !== null) return storedPreference;
+    return !hasSeenTutorial();
+}
+
+function updateTutorialSettingsUi() {
+    const storedPreference = readStoredBoolean(TUTORIAL_ENABLED_STORAGE_KEY);
+    if (tutorialEnabledCheckbox) {
+        tutorialEnabledCheckbox.checked = getTutorialEnabledPreference();
+    }
+    if (tutorialPreferenceNote) {
+        if (storedPreference === true) {
+            tutorialPreferenceNote.textContent = t("settings.tutorial_enabled_note");
+        } else if (storedPreference === false) {
+            tutorialPreferenceNote.textContent = t("settings.tutorial_disabled_note");
+        } else {
+            tutorialPreferenceNote.textContent = hasSeenTutorial()
+                ? t("settings.tutorial_returning_note")
+                : t("settings.tutorial_first_time_note");
+        }
+    }
+}
+
+function setTutorialEnabledPreference(enabled) {
+    writeStoredBoolean(TUTORIAL_ENABLED_STORAGE_KEY, Boolean(enabled));
+    updateTutorialSettingsUi();
+}
+
+function isTutorialEnabledForNewAdventure() {
+    if (tutorialEnabledCheckbox) return Boolean(tutorialEnabledCheckbox.checked);
+    return getTutorialEnabledPreference();
+}
+
+function renderTutorialContent(container) {
+    if (!container || !window.I18N || !window.I18N.tutorial) return;
+    const tutorial = window.I18N.tutorial;
+    const sections = Array.isArray(tutorial.sections) ? tutorial.sections : [];
+    const sectionHtml = sections.map((section) => {
+        const paragraphs = Array.isArray(section.body) ? section.body : [];
+        const bullets = Array.isArray(section.bullets) ? section.bullets : [];
+        const examples = Array.isArray(section.examples) ? section.examples : [];
+        return `
+            <section class="tutorial-section">
+                <h3>${escapeHtml(section.title)}</h3>
+                ${paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("")}
+                ${bullets.length ? `
+                    <ul>
+                        ${bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join("")}
+                    </ul>
+                ` : ""}
+                ${examples.length ? `
+                    <div class="tutorial-examples">
+                        ${examples.map((example) => `
+                            <article class="tutorial-example">
+                                <strong>${escapeHtml(example.label)}</strong>
+                                <code>${escapeHtml(example.command)}</code>
+                                <span>${escapeHtml(example.description)}</span>
+                            </article>
+                        `).join("")}
+                    </div>
+                ` : ""}
+            </section>
+        `;
+    }).join("");
+
+    if (container === tutorialDialogContent) {
+        container.innerHTML = `
+            <div class="tutorial-content-frame" tabindex="0">
+                ${sectionHtml}
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = `
+        <article class="tutorial-card">
+            <p class="tutorial-kicker">${escapeHtml(tutorial.kicker)}</p>
+            <h2>${escapeHtml(tutorial.title)}</h2>
+            <p class="tutorial-copy">${escapeHtml(tutorial.copy)}</p>
+            <div class="tutorial-content-frame" tabindex="0">
+                ${sectionHtml}
+            </div>
+        </article>
+    `;
+}
+
+function renderTutorialSurfaces() {
+    renderTutorialContent(tutorialPage);
+    renderTutorialContent(tutorialDialogContent);
+    if (tutorialPrevBtn) tutorialPrevBtn.setAttribute("aria-label", t("tutorial.prev_label"));
+    if (tutorialNextBtn) tutorialNextBtn.setAttribute("aria-label", t("tutorial.next_label"));
+    if (settingsFlowPrevBtn) settingsFlowPrevBtn.setAttribute("aria-label", t("tutorial.prev_label"));
+    if (settingsFlowNextBtn) settingsFlowNextBtn.setAttribute("aria-label", t("tutorial.next_label"));
+    if (tutorialCloseBtn) tutorialCloseBtn.setAttribute("aria-label", t("tutorial.close_label"));
+}
+
+function isTutorialViewOpen() {
+    return tutorialView && tutorialView.classList.contains("active");
+}
+
+function isTutorialDialogOpen() {
+    return tutorialDialog && !tutorialDialog.classList.contains("hidden");
+}
+
+function openTutorialDialog() {
+    if (!tutorialDialog) return;
+    tutorialDialogReturnFocus = document.activeElement;
+    renderTutorialContent(tutorialDialogContent);
+    tutorialDialog.classList.remove("hidden");
+    if (tutorialCloseBtn) tutorialCloseBtn.focus();
+}
+
+function closeTutorialDialog() {
+    if (!tutorialDialog) return;
+    tutorialDialog.classList.add("hidden");
+    const focusTarget = tutorialDialogReturnFocus && document.contains(tutorialDialogReturnFocus)
+        ? tutorialDialogReturnFocus
+        : commandInput;
+    tutorialDialogReturnFocus = null;
+    if (focusTarget) focusTarget.focus();
 }
 
 function getItemMetadata(itemName) {
@@ -1598,6 +1770,7 @@ function updateSettingsUi(data) {
     if (!data) return;
     settingsData = data;
     setLanguageDisplay();
+    updateTutorialSettingsUi();
     setModeButtonsActive(data.active_mode || currentMode);
     const deepseek = data.deepseek || {};
     updateExperienceSettings(deepseek);
@@ -1676,8 +1849,26 @@ function cycleSettingsModel(direction) {
     switchModelMode(SETTINGS_MODEL_OPTIONS[nextIndex].mode);
 }
 
+function setNewAdventureFlowActive(active) {
+    newAdventureFlowActive = Boolean(active);
+    if (settingsView) settingsView.classList.toggle("onboarding-flow", newAdventureFlowActive);
+    if (tutorialView) tutorialView.classList.toggle("onboarding-flow", newAdventureFlowActive);
+}
+
+function cancelNewAdventureFlow() {
+    setNewAdventureFlowActive(false);
+    settingsReturnTarget = "menu";
+    newAdventurePrepared = false;
+    newAdventurePreparing = false;
+    setSettingsStatus("");
+    showStartView("menu");
+    showStartStatus("");
+    if (newAdventureBtn) newAdventureBtn.focus();
+}
+
 async function openSettings(source = "menu") {
-    settingsReturnTarget = source === "game" ? "game" : "menu";
+    settingsReturnTarget = source === "game" ? "game" : (source === "new-adventure" ? "new-adventure" : "menu");
+    setNewAdventureFlowActive(settingsReturnTarget === "new-adventure");
     const settingsThemeWorld = settingsReturnTarget === "game" ? currentWorld : "museum";
     showStartStatus("");
     if (startScreen) startScreen.dataset.galleryWorld = settingsThemeWorld;
@@ -1691,6 +1882,7 @@ async function openSettings(source = "menu") {
     showStartView("settings");
     if (settingsView) settingsView.focus();
     await loadSettings();
+    updateTutorialSettingsUi();
 }
 
 function closeSettings() {
@@ -1713,6 +1905,12 @@ function closeSettings() {
         gameInputWasEnabledBeforeSettings = false;
         return;
     }
+    if (settingsReturnTarget === "new-adventure") {
+        settingsReturnTarget = "menu";
+        cancelNewAdventureFlow();
+        return;
+    }
+    setNewAdventureFlowActive(false);
     showStartView("menu");
     if (settingsBtn) settingsBtn.focus();
 }
@@ -1817,6 +2015,11 @@ function resetClientViewForNewAdventure() {
 
 function enterGameFromIntro() {
     if (startScreenDismissed || !introStory || !introStory.classList.contains("active")) return;
+    markTutorialSeen();
+    setNewAdventureFlowActive(false);
+    newAdventurePrepared = false;
+    newAdventurePreparing = false;
+    settingsReturnTarget = "menu";
     titleScreenDismissed = true;
     if (titleScreen) titleScreen.classList.add("hidden");
     stopTitleParticles();
@@ -1896,20 +2099,63 @@ function returnToMainMenuFromGame() {
 async function beginNewAdventure() {
     if (!newAdventureBtn) return;
     newAdventureBtn.disabled = true;
-    showStartStatus(t("start.starting_adventure"));
+    setNewAdventureFlowActive(true);
+    newAdventurePrepared = false;
+    newAdventurePreparing = false;
+    showStartStatus("");
 
+    await openSettings("new-adventure");
+    newAdventureBtn.disabled = false;
+}
+
+async function prepareNewAdventureRun() {
+    if (newAdventurePrepared) return true;
+    if (newAdventurePreparing) return false;
+    newAdventurePreparing = true;
+    setSettingsStatus(t("start.starting_adventure"));
+    if (settingsFlowNextBtn) settingsFlowNextBtn.disabled = true;
+    if (tutorialNextBtn) tutorialNextBtn.disabled = true;
     try {
         await fetch("/api/reset", { method: "POST" });
     } catch (e) {
         console.warn("Reset before new adventure failed:", e);
+    } finally {
+        if (settingsFlowNextBtn) settingsFlowNextBtn.disabled = false;
+        if (tutorialNextBtn) tutorialNextBtn.disabled = false;
+        newAdventurePreparing = false;
     }
 
     resetClientViewForNewAdventure();
     activeSaveSlotIndex = null;
     setUnsavedProgress(false);
+    newAdventurePrepared = true;
+    return true;
+}
+
+async function showIntroForNewAdventure() {
+    const prepared = await prepareNewAdventureRun();
+    if (!prepared) return;
+    setSettingsStatus("");
+    setNewAdventureFlowActive(false);
     showStartView("intro");
-    newAdventureBtn.disabled = false;
     if (introStory) introStory.focus();
+}
+
+function advanceFromNewAdventureSettings() {
+    if (!newAdventureFlowActive || newAdventurePreparing) return;
+    if (isTutorialEnabledForNewAdventure()) {
+        renderTutorialContent(tutorialPage);
+        showStartView("tutorial");
+        if (tutorialView) tutorialView.focus();
+        return;
+    }
+    showIntroForNewAdventure();
+}
+
+function backFromTutorialView() {
+    if (!newAdventureFlowActive) return;
+    showStartView("settings");
+    if (settingsView) settingsView.focus();
 }
 
 if (titleScreen) {
@@ -1970,6 +2216,20 @@ if (settingsBackBtn) {
     settingsBackBtn.addEventListener("click", closeSettings);
 }
 
+if (settingsFlowPrevBtn) {
+    settingsFlowPrevBtn.addEventListener("click", cancelNewAdventureFlow);
+}
+
+if (settingsFlowNextBtn) {
+    settingsFlowNextBtn.addEventListener("click", advanceFromNewAdventureSettings);
+}
+
+if (tutorialEnabledCheckbox) {
+    tutorialEnabledCheckbox.addEventListener("change", () => {
+        setTutorialEnabledPreference(tutorialEnabledCheckbox.checked);
+    });
+}
+
 if (galleryPrevBtn) {
     galleryPrevBtn.addEventListener("click", () => setGalleryPage(galleryPageIndex - 1));
 }
@@ -1984,6 +2244,18 @@ if (galleryIndicator) {
         if (!dot) return;
         setGalleryPage(Number(dot.dataset.galleryIndex));
     });
+}
+
+if (tutorialBackBtn) {
+    tutorialBackBtn.addEventListener("click", backFromTutorialView);
+}
+
+if (tutorialPrevBtn) {
+    tutorialPrevBtn.addEventListener("click", backFromTutorialView);
+}
+
+if (tutorialNextBtn) {
+    tutorialNextBtn.addEventListener("click", showIntroForNewAdventure);
 }
 
 if (languagePrevBtn) {
@@ -2108,10 +2380,27 @@ window.addEventListener("keydown", (e) => {
         closeInventoryDialog();
         return;
     }
+    if (isTutorialDialogOpen() && e.key === "Escape") {
+        e.preventDefault();
+        closeTutorialDialog();
+        return;
+    }
     if (isSettingsOpen() && e.key === "Escape") {
         e.preventDefault();
         closeSettings();
         return;
+    }
+    if (isSettingsOpen() && newAdventureFlowActive) {
+        if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            cancelNewAdventureFlow();
+            return;
+        }
+        if (e.key === "ArrowRight") {
+            e.preventDefault();
+            advanceFromNewAdventureSettings();
+            return;
+        }
     }
     if (endGameDialog && !endGameDialog.classList.contains("hidden") && e.key === "Escape") {
         hideEndGameDialog();
@@ -2131,6 +2420,23 @@ window.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
             e.preventDefault();
             closeGallery();
+            return;
+        }
+    }
+    if (isTutorialViewOpen()) {
+        if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            backFromTutorialView();
+            return;
+        }
+        if (e.key === "ArrowRight") {
+            e.preventDefault();
+            showIntroForNewAdventure();
+            return;
+        }
+        if (e.key === "Escape") {
+            e.preventDefault();
+            backFromTutorialView();
             return;
         }
     }
@@ -2190,6 +2496,16 @@ if (inventoryCloseBtn) {
 if (inventoryDialog) {
     inventoryDialog.addEventListener("click", (e) => {
         if (e.target === inventoryDialog) closeInventoryDialog();
+    });
+}
+
+if (tutorialCloseBtn) {
+    tutorialCloseBtn.addEventListener("click", closeTutorialDialog);
+}
+
+if (tutorialDialog) {
+    tutorialDialog.addEventListener("click", (e) => {
+        if (e.target === tutorialDialog) closeTutorialDialog();
     });
 }
 
@@ -2311,28 +2627,29 @@ function detectMoveTarget(command) {
 const QUICK_ACTIONS = {
     museum: [
         { labelKey: "quick_actions.museum.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
+        { labelKey: "quick_actions.museum.inventory", cmd: "__open_inventory__" },
         { labelKey: "quick_actions.museum.enter_starry_night", cmd: { en: "(enter starry night)", zh: "（进入星月夜）" } },
         { labelKey: "quick_actions.museum.enter_great_wave", cmd: { en: "(enter great wave)", zh: "（进入神奈川冲浪里）" } },
         { labelKey: "quick_actions.museum.enter_sunrise", cmd: { en: "(enter impression sunrise)", zh: "（进入印象·日出）" } },
-        { labelKey: "quick_actions.museum.help", cmd: { en: "(help)", zh: "（帮助）" } }
+        { labelKey: "quick_actions.museum.help", cmd: "__open_tutorial__" }
     ],
     starry_night: [
         { labelKey: "quick_actions.starry_night.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
         { labelKey: "quick_actions.starry_night.inventory", cmd: "__open_inventory__" },
         { labelKey: "quick_actions.starry_night.return_museum", cmd: { en: "(return to museum)", zh: "（返回博物馆）" } },
-        { labelKey: "quick_actions.starry_night.help", cmd: { en: "(help)", zh: "（帮助）" } }
+        { labelKey: "quick_actions.starry_night.help", cmd: "__open_tutorial__" }
     ],
     great_wave: [
         { labelKey: "quick_actions.great_wave.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
         { labelKey: "quick_actions.great_wave.inventory", cmd: "__open_inventory__" },
         { labelKey: "quick_actions.great_wave.return_museum", cmd: { en: "(return to museum)", zh: "（返回博物馆）" } },
-        { labelKey: "quick_actions.great_wave.help", cmd: { en: "(help)", zh: "（帮助）" } }
+        { labelKey: "quick_actions.great_wave.help", cmd: "__open_tutorial__" }
     ],
     impression_sunrise: [
         { labelKey: "quick_actions.impression_sunrise.look_around", cmd: { en: "(look around)", zh: "（四处看看）" } },
         { labelKey: "quick_actions.impression_sunrise.inventory", cmd: "__open_inventory__" },
         { labelKey: "quick_actions.impression_sunrise.return_museum", cmd: { en: "(return to museum)", zh: "（返回博物馆）" } },
-        { labelKey: "quick_actions.impression_sunrise.help", cmd: { en: "(help)", zh: "（帮助）" } }
+        { labelKey: "quick_actions.impression_sunrise.help", cmd: "__open_tutorial__" }
     ]
 };
 
@@ -2574,13 +2891,32 @@ function updateSidePanel(data) {
 function getQuickActionCommand(action) {
     if (!action) return "";
     if (action.cmd === "__open_inventory__") return action.cmd;
+    if (action.cmd === "__open_tutorial__") return action.cmd;
     if (typeof action.cmd === "string") return action.cmd;
     const lang = window.I18N && window.I18N.lang ? window.I18N.lang : "en";
     return action.cmd[lang] || action.cmd.en || "";
 }
 
+function getQuickActionPriority(action) {
+    if (!action) return 4;
+    if (action.cmd === "__open_inventory__" || action.labelKey.endsWith(".inventory")) return 1;
+    if (action.cmd === "__open_tutorial__" || action.labelKey.endsWith(".help")) return 2;
+    if (action.labelKey.endsWith(".look_around")) return 3;
+    return 4;
+}
+
+function sortQuickActions(actions) {
+    return actions
+        .map((action, index) => ({ action, index }))
+        .sort((a, b) => {
+            const priorityDiff = getQuickActionPriority(a.action) - getQuickActionPriority(b.action);
+            return priorityDiff || a.index - b.index;
+        })
+        .map(entry => entry.action);
+}
+
 function updateQuickActions(worldId) {
-    const actions = QUICK_ACTIONS[worldId] || QUICK_ACTIONS.museum;
+    const actions = sortQuickActions(QUICK_ACTIONS[worldId] || QUICK_ACTIONS.museum);
     quickActions.innerHTML = "";
     actions.forEach(a => {
         const btn = document.createElement("button");
@@ -2590,6 +2926,8 @@ function updateQuickActions(worldId) {
         btn.dataset.cmd = command;
         if (command === "__open_inventory__") {
             btn.dataset.action = "open-inventory";
+        } else if (command === "__open_tutorial__") {
+            btn.dataset.action = "open-tutorial";
         }
         quickActions.appendChild(btn);
     });
@@ -2742,6 +3080,10 @@ quickActions.addEventListener("click", (e) => {
     if (btn) {
         if (btn.dataset.action === "open-inventory") {
             openInventoryDialog();
+            return;
+        }
+        if (btn.dataset.action === "open-tutorial") {
+            openTutorialDialog();
             return;
         }
         sendCommand(btn.dataset.cmd);
@@ -2986,6 +3328,8 @@ window.addEventListener("load", async () => {
     }
     // Apply I18N to HTML immediately after init, before any view rendering
     if (typeof applyI18N === "function") applyI18N();
+    updateTutorialSettingsUi();
+    renderTutorialSurfaces();
 
     await migrateBrowserSaveSlots();
 
@@ -3055,6 +3399,15 @@ window.addEventListener("load", async () => {
             titleContinue.textContent = window.I18N.title_screen.continue_prompt;
         }
     }, 800);
+});
+
+window.addEventListener("storage", (e) => {
+    if (e.key === TUTORIAL_ENABLED_STORAGE_KEY || e.key === TUTORIAL_SEEN_STORAGE_KEY) {
+        updateTutorialSettingsUi();
+    }
+    if (e.key === "cursed_canvas_lang" && e.newValue && e.newValue !== (window.I18N && window.I18N.lang)) {
+        switchLanguage(e.newValue);
+    }
 });
 
 window.addEventListener("beforeunload", () => {

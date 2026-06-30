@@ -27,6 +27,87 @@
     ],
     "continue_prompt": "Press any key to continue"
   },
+  "tutorial": {
+    "kicker": "Quick Start",
+    "title": "Beginner Tutorial",
+    "back": "Back",
+    "copy": "Learn the command pattern, restoration loop, and quick tools before you step into an unstable canvas world.",
+    "dialog_copy": "Review the core controls and the restoration loop at any time.",
+    "flow_hint": "Use the right arrow to continue to the prologue.",
+    "prev_label": "Previous setup step",
+    "next_label": "Next setup step",
+    "close_label": "Close tutorial",
+    "sections": [
+      {
+        "title": "Your goal",
+        "body": [
+          "The museum contains unstable canvas worlds. Each world may have lost a color, sound, memory, or object that holds it together.",
+          "Restore the worlds you enter, then return to the museum when the path feels complete."
+        ],
+        "bullets": [
+          "Explore each world to understand what changed.",
+          "Talk with the artist, spirit, or guide you meet there.",
+          "Collect useful items and use them where the story points you.",
+          "Return to the museum when a world feels restored."
+        ]
+      },
+      {
+        "title": "Actions and dialogue",
+        "body": [
+          "Use parentheses for actions. Type plain sentences when you want to talk to an NPC.",
+          "If a command does not do what you expected, try a shorter action with a clear verb and object."
+        ],
+        "examples": [
+          {
+            "label": "Action",
+            "command": "(look around)",
+            "description": "Inspect the current scene."
+          },
+          {
+            "label": "Action",
+            "command": "(take lantern)",
+            "description": "Pick up an item when it is present."
+          },
+          {
+            "label": "Dialogue",
+            "command": "Where is the pigment?",
+            "description": "Ask the character in the scene."
+          },
+          {
+            "label": "Travel",
+            "command": "(return to museum)",
+            "description": "Move between the museum and canvas worlds."
+          }
+        ]
+      },
+      {
+        "title": "A typical turn",
+        "body": [
+          "Most progress follows a simple loop: observe, ask, collect, use, and report back.",
+          "The quick action buttons below the input change with your location and cover common moves."
+        ],
+        "bullets": [
+          "Start with Look Around after entering a new place.",
+          "Ask the local character what is wrong and what they need.",
+          "Open Inventory when you forget what you are carrying.",
+          "Use Help to reopen this tutorial without spending a turn."
+        ]
+      },
+      {
+        "title": "When stuck",
+        "body": [
+          "The game understands flexible language, but direct commands work best for concrete actions.",
+          "Your inventory, quest tracker, and location panel stay updated on the right side of the screen."
+        ],
+        "bullets": [
+          "Try looking around again after taking or using an item.",
+          "Ask the NPC about the missing color, the curse, or the item you found.",
+          "If a world feels complete, return to the museum and choose another frame or path.",
+          "Save progress from the Session panel before leaving the game."
+        ]
+      }
+    ]
+  },
   "game": {
     "header_title": "The Cursed Canvas",
     "location_badge_default": "Museum",
@@ -38,6 +119,7 @@
   "quick_actions": {
     "museum": {
       "look_around": "Look Around",
+      "inventory": "Inventory",
       "enter_starry_night": "Enter Starry Night",
       "enter_great_wave": "Enter Great Wave",
       "enter_sunrise": "Enter Sunrise",
@@ -82,6 +164,14 @@
     "language_desc": "Switching the display language does not change the dialogue history in existing save slots.",
     "language_switched": "Language switched successfully.",
     "language_switch_failed": "Language switch failed.",
+    "tutorial_kicker": "Tutorial",
+    "tutorial_heading": "Beginner Tutorial",
+    "tutorial_desc": "Show a practical guide before the prologue when starting a new adventure.",
+    "tutorial_toggle": "Enable beginner tutorial",
+    "tutorial_first_time_note": "First playthroughs start with this enabled. Later adventures default to off unless you turn it on.",
+    "tutorial_returning_note": "You have already started an adventure on this device, so new adventures default to skipping the tutorial.",
+    "tutorial_enabled_note": "The tutorial will appear before the prologue in new adventures.",
+    "tutorial_disabled_note": "The tutorial will be skipped in new adventures unless you enable it again.",
     "ai_kicker": "AI Configuration",
     "model_heading": "Model",
     "model_desc": "Switch between the online API and the local model.",
@@ -233,7 +323,7 @@
     "joyful": "A warm joy washes over you..."
   },
   "messages": {
-    "opening": "The museum waits in moonlit silence. The paintings are alive, and three worlds shimmer before you: Starry Night, The Great Wave, and Impression, Sunrise.\n\nHow to play:\n• Actions: wrap in parentheses, e.g. (look around), (take lantern), (enter starry night)\n• Dialogue: just type, e.g. Where is the lantern? Tell me about the curse.\n\nUse the quick action buttons below for common actions.",
+    "opening": "The museum waits in moonlit silence. The paintings are awake, and whispers drift from behind their frames. A starry sky turns, a wave gathers, and a harbor sunrise flickers inside the mist.\n\nYou stand in the central gallery. The doors behind you are sealed by the curse. To leave, you will need to step into these changing canvas worlds and restore the colors, sounds, and memories they have lost.\n\nBegin here: look around, or choose a glowing frame.",
     "welcome_back": "Welcome back! You can continue exploring the museum or revisit the paintings. Thank you for playing The Cursed Canvas!",
     "all_restored_hint": "You have successfully restored all paintings! You can return to the museum whenever you're ready. Of course, you're welcome to stay a while longer and chat with the artists.",
     "game_ending": "All paintings restored! The museum's magic flows freely. The great doors open — you are free.\n\nYou can explore the museum, revisit the paintings to chat with the artists, or click the \"View Your Story\" button on the right to see your adventure summarized.",
