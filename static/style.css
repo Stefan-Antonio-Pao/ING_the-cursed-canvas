@@ -2327,38 +2327,6 @@ body[data-world="impression_sunrise"] .npc-portrait {
 }
 
 /* Model card */
-#model-toggle {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-}
-
-.toggle-btn {
-    flex: 1;
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    border-radius: 4px;
-    padding: 6px 8px;
-    font-size: 0.72rem;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    transition: all 0.2s;
-}
-
-.toggle-btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
-
-.toggle-btn.active {
-    background: rgba(212, 168, 67, 0.12);
-    border-color: var(--accent-gold);
-    color: var(--accent-gold);
-}
-
-.toggle-btn.loading {
-    opacity: 0.6;
-    cursor: wait;
-}
-
 #model-status-text {
     font-size: 0.7rem;
     color: var(--text-dim);

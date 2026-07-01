@@ -60,6 +60,56 @@ class GameState:
             "inventory": [get_item(i)["name"] for i in self.inventory] if self.inventory else [],
             "quests": dict(self.quests_completed), "game_over": self.game_complete, "victory": self.game_complete}
 
+    def _lang_is_zh(self):
+        data = load_world_data()
+        game_title = (data.get("game") or {}).get("title", "")
+        return self._contains_cjk(game_title)
+
+    def _localized_fallback(self, key, **kwargs):
+        zh = self._lang_is_zh()
+        if key == "unknown_action":
+            command = kwargs.get("command", "")
+            return f'你试着“{command}”，但什么也没有发生。试着四处看看。' if zh else f'You try "{command}" but nothing happens. Try looking around.'
+        if key == "notice_item":
+            item = kwargs.get("item") or {}
+            if zh:
+                return f"你注意到{item.get('name', '一个物品')}——{item.get('description', '')}"
+            return f"You notice a {item.get('name', 'item').lower()} -- {item.get('description', '')}"
+        if key == "talk_to":
+            npc_name = kwargs.get("npc_name", "")
+            return f"你转向{npc_name}。" if zh else f"You talk to {npc_name}."
+        if key == "pick_up":
+            item = kwargs.get("item") or {}
+            return f"你捡起了{item.get('name', '那个物品')}。" if zh else f"You pick up the {item.get('name', 'item')}."
+        if key == "hold_item":
+            item = kwargs.get("item") or {}
+            return f"你握着{item.get('name', '那个物品')}——{item.get('description', '')}" if zh else f"You hold the {item.get('name', 'item').lower()} -- {item.get('description', '')}"
+        if key == "generic_help":
+            return "探索博物馆，并步入一幅画作来开始你的任务。" if zh else "Explore the museum and step into a painting to begin your quest."
+        if key == "no_path":
+            return "这里没有路可走。" if zh else "There's nowhere to go from here."
+        if key == "inventory_empty":
+            return "你的口袋是空的。" if zh else "Your pockets are empty."
+        if key == "inventory_list":
+            items = kwargs.get("items", "")
+            return "你携带着：" + items if zh else "You are carrying: " + items
+        if key == "bad_target":
+            target_id = kwargs.get("target_id", "")
+            return f"你不能前往 {target_id}。" if zh else f"You can't go to {target_id}."
+        if key == "enter_painting":
+            target = kwargs.get("target") or {}
+            return f"你步入画作：{target.get('name', '')}。\n\n{target.get('description', '')}" if zh else f"You step into the painting: {target.get('name', '')}.\n\n{target.get('description', '')}"
+        if key == "already_here":
+            return "你已经在这里了。" if zh else "You are already here."
+        if key == "invalid_move":
+            exit_names = kwargs.get("exit_names") or []
+            if zh:
+                return "\n\n你无法从这里前往那里。可用路径：" + "、".join(exit_names) + "。"
+            return f"\n\nYou cannot go there from here. Available paths: {', '.join(exit_names)}."
+        if key == "no_paths":
+            return "\n\n这里没有明显的路径。" if zh else "\n\nThere are no obvious paths from here."
+        return ""
+
     def process(self, intent, command, ai_llm=None, sentiment=None):
         self.turn_count += 1
         world = get_world(self.current_world)
@@ -85,7 +135,7 @@ class GameState:
             if intent in ("explore", "talk"): args.append(ai_llm)
             scene, npc_reply, npc_name = handler(*args)
         else:
-            scene = f'You try "{command}" but nothing happens. Try looking around.'
+            scene = self._localized_fallback("unknown_action", command=command)
             npc_reply, npc_name = None, None
 
         if all(self.quests_completed.values()) and not self.game_complete:
@@ -107,7 +157,7 @@ class GameState:
         for item_id in world.get("items_available", []):
             item = get_item(item_id)
             if item and item_id not in self.items_found:
-                parts.append(f"You notice a {item['name'].lower()} -- {item['description']}")
+                parts.append(self._localized_fallback("notice_item", item=item))
         if world.get("exits"):
             parts.append(" | ".join(ex["description"] for ex in world["exits"]))
         for item_id, hidden in world.get("items_hidden", {}).items():
@@ -118,7 +168,7 @@ class GameState:
         # AI narration is appended as flavor on success; scripted clues stay
         if ai_llm:
             try:
-                ai_scene = ai_llm.generate_scene(world["name"], world["description"], command)
+                ai_scene = ai_llm.generate_scene(world["name"], world["description"], command, lang="zh" if self._lang_is_zh() else "en")
                 if ai_scene and len(ai_scene) > 15 and ai_scene != scene:
                     scene = scene + "\n\n" + ai_scene
             except Exception: pass
@@ -136,7 +186,7 @@ class GameState:
         if ai_llm:
             try:
                 ai_reply, ok = ai_llm.generate_dialogue(
-                    system_prompt, npc_name, history, command)
+                    system_prompt, npc_name, history, command, lang="zh" if self._lang_is_zh() else "en")
                 if ok and ai_reply:
                     npc_reply = ai_reply
             except Exception: pass
@@ -150,7 +200,7 @@ class GameState:
         # Persist the full exchange (player + npc) for future context
         self.memory.add_npc_exchange(npc_id, "Player", command)
         self.memory.add_npc_exchange(npc_id, npc_name, npc_reply)
-        return f"You talk to {npc_name}.", npc_reply, npc_name
+        return self._localized_fallback("talk_to", npc_name=npc_name), npc_reply, npc_name
     
     def _match_npc_topic(self, cmd_lower, npc):
         """Smart topic matching: specific keywords first, then generic questions."""
@@ -191,8 +241,8 @@ class GameState:
         item = get_item(used_item_id)
         if used_item_id not in self.inventory and used_item_id not in self.items_found:
             self.inventory.append(used_item_id); self.items_found.add(used_item_id)
-            return item.get("pickup_msg", f"You pick up the {item['name']}."), None, None
-        scene = f"You hold the {item['name'].lower()} -- {item['description']}"
+            return item.get("pickup_msg", self._localized_fallback("pick_up", item=item)), None, None
+        scene = self._localized_fallback("hold_item", item=item)
         for hid_id, hidden in world.get("items_hidden", {}).items():
             if hidden.get("reveal_item") == used_item_id and hid_id not in self.items_found:
                 scene += " " + hidden["reveal_msg"]
@@ -242,7 +292,7 @@ class GameState:
             hint = world.get("quest_description", "")
             if world["npcs"]: hint += " " + get_npc(world["npcs"][0]).get("quest_hint", "")
             return hint, None, None
-        return "Explore the museum and step into a painting to begin your quest.", None, None
+        return self._localized_fallback("generic_help"), None, None
 
     def _handle_move(self, command, world):
         cmd_lower = command.lower()
@@ -279,19 +329,19 @@ class GameState:
                 name_words = [w for w in target_name.split() if len(w) > 3]
                 if len(name_words) >= 2 and all(w in cmd_lower for w in name_words):
                     return self._move_to_world(target)
-        return "There's nowhere to go from here.", None, None
+        return self._localized_fallback("no_path"), None, None
 
     def _handle_inventory(self, command, world):
-        if not self.inventory: return "Your pockets are empty.", None, None
-        return "You are carrying: " + ", ".join(get_item(i)["name"] for i in self.inventory), None, None
+        if not self.inventory: return self._localized_fallback("inventory_empty"), None, None
+        return self._localized_fallback("inventory_list", items=", ".join(get_item(i)["name"] for i in self.inventory)), None, None
 
     def _move_to_world(self, target_id):
         target = get_world(target_id)
-        if not target: return f"You can't go to {target_id}.", None, None
+        if not target: return self._localized_fallback("bad_target", target_id=target_id), None, None
         self.current_world = target_id
         self.visited_worlds.add(target_id)
         self._first_turn = False
-        scene = f"You step into the painting: {target['name']}.\n\n{target['description']}"
+        scene = self._localized_fallback("enter_painting", target=target)
         npc_reply = None; npc_name = None
         if target["npcs"]:
             npc = get_npc(target["npcs"][0]); self.npcs_met.add(target["npcs"][0])
@@ -359,7 +409,7 @@ class GameState:
             
             # Reject move to current location
             if move_target == self.current_world:
-                scene = (scene or "") + "\n\nYou are already here."
+                scene = (scene or "") + "\n\n" + self._localized_fallback("already_here")
             else:
                 # Validate the move target is a valid exit
                 valid_exits = [ex["target"] for ex in world.get("exits", [])]
@@ -385,9 +435,9 @@ class GameState:
                     # Invalid move target - provide feedback about available exits
                     exit_names = [get_world(ex["target"])["name"] for ex in world.get("exits", []) if get_world(ex["target"])]
                     if exit_names:
-                        scene = (scene or "") + f"\n\nYou cannot go there from here. Available paths: {', '.join(exit_names)}."
+                        scene = (scene or "") + self._localized_fallback("invalid_move", exit_names=exit_names)
                     else:
-                        scene = (scene or "") + "\n\nThere are no obvious paths from here."
+                        scene = (scene or "") + self._localized_fallback("no_paths")
 
         elif intent == "use_item":
             scene_lower = (scene or "").lower()
@@ -478,7 +528,7 @@ class GameState:
             pickup_lines = []
             for item_id in awarded:
                 item = get_item(item_id)
-                pickup_lines.append(item.get("pickup_msg") if item and item.get("pickup_msg") else f"You pick up {item_id.replace('_', ' ')}.")
+                pickup_lines.append(item.get("pickup_msg") if item and item.get("pickup_msg") else self._localized_fallback("pick_up", item={"name": item_id.replace("_", " ")}))
             scene = " ".join(pickup_lines)
 
         if not self.quests_completed.get(action_world_id):

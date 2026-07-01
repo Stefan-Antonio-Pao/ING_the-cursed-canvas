@@ -18,7 +18,7 @@ from engine.world_data import load_world_data, get_world, get_npc, get_world_nam
 from ai.intent import IntentClassifier
 from ai.sentiment import analyze_sentiment
 from ai.dm_prompt import build_dm_prompt, parse_dm_response
-from ai.llm import get_llm_client, get_remote_experience_client, track_deepseek_usage
+from ai.llm import check_local_runtime, get_llm_client, get_remote_experience_client, track_deepseek_usage
 from i18n.loader import (
     resolve_language, get_supported_languages, get_ui_strings,
     get_keywords, get_move_world_keywords, LANG_FALLBACK,
@@ -40,6 +40,9 @@ _llm_ready = False
 _llm_loading = False
 _llm_progress_percent = 0
 _llm_loading_started_at = 0
+_llm_error = None
+_llm_runtime_checked = False
+_llm_runtime_ok = None
 _active_mode = "api"  # "api" (DeepSeek) or "local" (Phi-3-mini)
 
 # API failure tracking — skip API after repeated failures
@@ -84,14 +87,46 @@ def _current_lang():
     except RuntimeError:
         return "en"
 
+
+_ENGLISH_LEAK_RE = re.compile(
+    r"\b("
+    r"you|your|you're|you've|the|there|this|that|try|look|talk|speak|"
+    r"player|inventory|quest|item|painting|museum|world|scene|npc|"
+    r"hello|traveler|where|what|how|why|is|are|can|cannot|can't"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _contains_cjk(text):
+    return bool(re.search(r"[\u3400-\u9fff]", text or ""))
+
+
+def _has_english_leak(text):
+    return bool(_ENGLISH_LEAK_RE.search(text or ""))
+
+
+def _dm_language_ok(dm_result, lang):
+    if lang != "zh" or not isinstance(dm_result, dict):
+        return True
+    for key in ("scene", "npc_reply"):
+        value = dm_result.get(key)
+        if value in (None, ""):
+            continue
+        if not _contains_cjk(value) or _has_english_leak(value):
+            logger.info("Rejecting DM %s for Chinese language leak: %r", key, value[:120])
+            return False
+    return True
+
 def _ensure_llm():
     """Lazy-load Phi-3-mini (heavy). Called when switching to local mode."""
-    global _llm, _llm_ready, _llm_loading, _llm_progress_percent, _llm_loading_started_at
+    global _llm, _llm_ready, _llm_loading, _llm_progress_percent, _llm_loading_started_at, _llm_error, _active_mode
     if _llm_ready or _llm_loading:
         return _llm
     _llm_loading = True
     _llm_progress_percent = 10
     _llm_loading_started_at = time.time()
+    _llm_error = None
     logger.info("Loading Phi-3-mini (unified LLM)...")
     try:
         from ai.llm import get_llm
@@ -102,6 +137,8 @@ def _ensure_llm():
         logger.info("Phi-3-mini loaded.")
     except Exception as e:
         _llm_progress_percent = 0
+        _llm_error = str(e)
+        _active_mode = "api"
         logger.warning(f"Phi-3-mini failed: {e}. Using scripted fallbacks.")
     finally:
         _llm_loading = False
@@ -113,6 +150,22 @@ def _warmup_async():
     logger.info("Background warmup started for Phi-3-mini...")
     _ensure_llm()
     logger.info("Background warmup complete.")
+
+
+def _record_local_runtime_result(result):
+    global _llm_error, _llm_runtime_checked, _llm_runtime_ok
+    _llm_runtime_checked = True
+    _llm_runtime_ok = bool(result.get("ok"))
+    if _llm_runtime_ok:
+        _llm_error = None
+    else:
+        _llm_error = result.get("error") or result.get("error_type") or "Local model runtime check failed."
+    return _llm_runtime_ok
+
+
+def _local_model_block_payload(error=None):
+    message = error or _llm_error or "Local model runtime is unavailable. Continue with DeepSeek API mode."
+    return _model_status_payload({"error": message, "local_runtime_ok": False})
 
 # Load classifier at import time (instant)
 _init_classifier()
@@ -430,6 +483,9 @@ def _model_status_payload(extra=None):
         "local_ready": _llm_ready,
         "local_loading": _llm_loading and not _llm_ready,
         "local_progress_percent": _local_model_progress_percent(),
+        "local_error": _llm_error,
+        "local_runtime_checked": _llm_runtime_checked,
+        "local_runtime_ok": _llm_runtime_ok,
         "classifier_ready": _classifier_ready,
         "game_ready": True,
     }
@@ -934,7 +990,10 @@ def handle_command():
                         {
                             "role": "user",
                             "content": (
-                                "Return one valid JSON object only. Do not include any extra text. "
+                                "只返回一个有效 JSON 对象，不要包含任何额外文本。scene 和 npc_reply 必须只使用中文。"
+                                "必须包含所有键：intent, scene, npc_reply, npc_name, mood, move_target。"
+                                if g.lang == "zh"
+                                else "Return one valid JSON object only. Do not include any extra text. "
                                 "Include all keys: intent, scene, npc_reply, npc_name, mood, move_target."
                             ),
                         },
@@ -947,6 +1006,9 @@ def handle_command():
                         retry_raw, retry_ok = dm_client.generate_dm_turn(retry_messages)
                     if retry_ok and retry_raw:
                         dm_result = parse_dm_response(retry_raw)
+                if dm_result:
+                    if not _dm_language_ok(dm_result, g.lang):
+                        dm_result = None
                 if dm_result:
                     # Action commands with explicit destinations must win over DM drift.
                     if is_action:
@@ -1115,6 +1177,14 @@ def set_mode():
     if new_mode not in ("api", "local"):
         return jsonify({"error": "Invalid mode. Use 'api' or 'local'."}), 400
 
+    if new_mode == "local" and not _llm_ready and not _llm_loading:
+        runtime_result = check_local_runtime()
+        if not _record_local_runtime_result(runtime_result):
+            _active_mode = "api"
+            session["llm_mode"] = "api"
+            logger.info("Local mode rejected by runtime check: %s", _llm_error)
+            return jsonify(_local_model_block_payload()), 503
+
     _active_mode = new_mode
     session["llm_mode"] = new_mode
 
@@ -1123,6 +1193,14 @@ def set_mode():
 
     logger.info(f"Mode switched to: {new_mode}")
     return jsonify(_model_status_payload())
+
+
+@app.route("/api/local-runtime/check", methods=["GET"])
+def local_runtime_check():
+    """Non-fatal probe for optional local-model dependencies."""
+    result = check_local_runtime()
+    _record_local_runtime_result(result)
+    return jsonify({**result, **_model_status_payload()})
 
 
 @app.route("/api/settings", methods=["GET", "POST"])

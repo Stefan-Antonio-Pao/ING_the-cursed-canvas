@@ -10,6 +10,7 @@ generate_scene, and generate_dm_turn.
 
 import logging
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -17,14 +18,6 @@ import contextvars
 import json
 import urllib.error
 import urllib.request
-
-import torch
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    StoppingCriteria,
-    StoppingCriteriaList,
-)
 
 logger = logging.getLogger(__name__)
 _deepseek_usage_callback = contextvars.ContextVar("deepseek_usage_callback", default=None)
@@ -38,6 +31,7 @@ DM_MAX_TOKENS = 1100
 DM_COMPLETION_RETRIES = 2
 
 DEFAULT_MODEL = "microsoft/Phi-3-mini-4k-instruct"
+_LOCAL_MODEL_DEPS = None
 
 SCENE_SYSTEM = (
     "You are the narrator of a text-adventure game set inside famous paintings. "
@@ -46,20 +40,77 @@ SCENE_SYSTEM = (
     "player sees, hears, and feels."
 )
 
+ZH_LANGUAGE_GUARD = (
+    "必须只使用简体中文回复。不要输出英文叙事短语；不要混用英文和中文。"
+)
 
-class _TimeoutCriteria(StoppingCriteria):
-    """Stop generation once a wall-clock deadline is reached.
+ENGLISH_LEAK_RE = re.compile(
+    r"\b("
+    r"you|your|you're|you've|the|there|this|that|try|look|talk|speak|"
+    r"player|inventory|quest|item|painting|museum|world|scene|npc|"
+    r"hello|traveler|where|what|how|why|is|are|can|cannot|can't"
+    r")\b",
+    re.IGNORECASE,
+)
 
-    Checked after every token, so a slow call returns whatever it managed to
-    produce instead of hanging forever. This keeps the request thread alive
-    (no orphan background threads) while honoring the generation timeout.
+
+def _contains_cjk(text):
+    return bool(re.search(r"[\u3400-\u9fff]", text or ""))
+
+
+def _has_english_leak(text):
+    return bool(ENGLISH_LEAK_RE.search(text or ""))
+
+
+def _with_language_guard(messages, lang):
+    if lang != "zh" or not messages:
+        return messages
+    guarded = list(messages)
+    first = dict(guarded[0])
+    first["content"] = f"{first.get('content', '')}\n\n{ZH_LANGUAGE_GUARD}"
+    guarded[0] = first
+    return guarded
+
+
+def _load_local_model_deps():
+    """Import heavy local-model dependencies only when local mode is used.
+
+    On Windows, importing torch can fail with DLL initialization errors on
+    machines missing compatible runtime dependencies. Keeping this lazy lets
+    the desktop app still start in API mode and report local-model failures.
     """
+    global _LOCAL_MODEL_DEPS
+    if _LOCAL_MODEL_DEPS is None:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 
-    def __init__(self, timeout):
-        self.deadline = time.time() + timeout
+        _LOCAL_MODEL_DEPS = {
+            "torch": torch,
+            "AutoModelForCausalLM": AutoModelForCausalLM,
+            "AutoTokenizer": AutoTokenizer,
+            "StoppingCriteria": StoppingCriteria,
+            "StoppingCriteriaList": StoppingCriteriaList,
+        }
+    return _LOCAL_MODEL_DEPS
 
-    def __call__(self, input_ids, scores, **kwargs):
-        return time.time() > self.deadline
+
+def check_local_runtime():
+    """Return a non-throwing runtime probe for the optional local model stack."""
+    try:
+        deps = _load_local_model_deps()
+        torch = deps["torch"]
+        return {
+            "ok": True,
+            "torch_version": getattr(torch, "__version__", "unknown"),
+            "cuda_available": bool(torch.cuda.is_available()),
+            "mps_available": bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "error_type": exc.__class__.__name__,
+        }
 
 
 class GameLLM:
@@ -67,17 +118,23 @@ class GameLLM:
 
     def __init__(self, model_name=DEFAULT_MODEL):
         logger.info(f"Loading {model_name} ...")
+        deps = _load_local_model_deps()
+        self.torch = deps["torch"]
+        self.AutoModelForCausalLM = deps["AutoModelForCausalLM"]
+        self.AutoTokenizer = deps["AutoTokenizer"]
+        self.StoppingCriteria = deps["StoppingCriteria"]
+        self.StoppingCriteriaList = deps["StoppingCriteriaList"]
         self.device = self._pick_device()
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = self.AutoTokenizer.from_pretrained(model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         quant_cfg = self._maybe_quant_config()
-        load_kwargs = {"torch_dtype": torch.float16} if self.device != "cpu" else {}
+        load_kwargs = {"torch_dtype": self.torch.float16} if self.device != "cpu" else {}
         if quant_cfg is not None:
             load_kwargs = {"quantization_config": quant_cfg, "device_map": "auto"}
 
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+        self.model = self.AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
         if quant_cfg is None:
             self.model = self.model.to(self.device)
         self.model.eval()
@@ -87,6 +144,7 @@ class GameLLM:
 
     @staticmethod
     def _pick_device():
+        torch = _load_local_model_deps()["torch"]
         if torch.cuda.is_available():
             return "cuda"
         if torch.backends.mps.is_available():
@@ -100,6 +158,7 @@ class GameLLM:
         On CPU/MPS we fall back to full precision; bitsandbytes 4-bit inference
         is a CUDA feature. The game stays fully playable either way.
         """
+        torch = _load_local_model_deps()["torch"]
         if not torch.cuda.is_available():
             return None
         try:
@@ -117,34 +176,40 @@ class GameLLM:
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
-    def generate_dialogue(self, system_prompt, npc_name, history, player_text):
+    def generate_dialogue(self, system_prompt, npc_name, history, player_text, lang=None):
         """Generate an in-character NPC reply.
 
         Returns (response_text, success_flag). On timeout/failure/low quality,
         returns (None, False) so the caller can fall back to the static matcher.
         """
+        if lang is None:
+            lang = "zh" if _contains_cjk(system_prompt) or _contains_cjk(player_text) else "en"
         messages = [{"role": "system", "content": system_prompt}]
         # history: list of (speaker, text) -- speaker == "Player" is the user.
         for speaker, text in (history or [])[-8:]:
             role = "user" if speaker in ("Player", "player") else "assistant"
             messages.append({"role": role, "content": text})
         messages.append({"role": "user", "content": player_text})
+        messages = _with_language_guard(messages, lang)
 
         for attempt in range(MAX_RETRIES + 1):
             reply = self._run(messages, DIALOGUE_MAX_TOKENS)
-            if reply and self._quality_ok(reply, player_text):
+            if reply and self._quality_ok(reply, player_text, lang=lang):
                 return reply, True
             if reply:
                 logger.info(f"Dialogue rejected by quality gate (attempt {attempt + 1}).")
         return None, False
 
-    def generate_scene(self, world_name, world_description, player_action):
+    def generate_scene(self, world_name, world_description, player_action, lang=None):
         """Generate a short atmospheric narration for an explore action.
 
         Returns the scene text, or None on timeout/failure.
         """
+        if lang is None:
+            lang = "zh" if _contains_cjk(world_name) or _contains_cjk(world_description) or _contains_cjk(player_action) else "en"
+        system_prompt = SCENE_SYSTEM + ("\n\n" + ZH_LANGUAGE_GUARD if lang == "zh" else "")
         messages = [
-            {"role": "system", "content": SCENE_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": (
@@ -157,7 +222,7 @@ class GameLLM:
         ]
         for attempt in range(MAX_RETRIES + 1):
             scene = self._run(messages, SCENE_MAX_TOKENS)
-            if scene and self._quality_ok(scene, player_action):
+            if scene and self._quality_ok(scene, player_action, lang=lang):
                 return scene
         return None
 
@@ -173,7 +238,7 @@ class GameLLM:
             with self._lock:
                 inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
                 input_len = inputs["input_ids"].shape[1]
-                stopping = StoppingCriteriaList([_TimeoutCriteria(GENERATION_TIMEOUT)])
+                stopping = self._timeout_stopping_criteria(GENERATION_TIMEOUT)
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
@@ -192,6 +257,19 @@ class GameLLM:
             logger.warning(f"LLM generation failed: {e}")
             return None
 
+    def _timeout_stopping_criteria(self, timeout):
+        """Stop generation once a wall-clock deadline is reached."""
+        stopping_base = self.StoppingCriteria
+
+        class TimeoutCriteria(stopping_base):
+            def __init__(self, timeout_seconds):
+                self.deadline = time.time() + timeout_seconds
+
+            def __call__(self, input_ids, scores, **kwargs):
+                return time.time() > self.deadline
+
+        return self.StoppingCriteriaList([TimeoutCriteria(timeout)])
+
     @staticmethod
     def _trim(text):
         """Cut to the last sentence-ending punctuation for clean output."""
@@ -203,17 +281,19 @@ class GameLLM:
         return text
 
     @staticmethod
-    def _quality_ok(text, player_text):
+    def _quality_ok(text, player_text, lang=None):
         """Reject empty, too-short, player-echo, or repetitive gibberish."""
         if not text or len(text) < 15:
             return False
+        if lang == "zh":
+            return _contains_cjk(text) and not _has_english_leak(text)
         low = text.lower()
         if player_text and player_text[:20].lower() in low:
             return False
         # Repetition gibberish: a 5-char slice reused many times.
         if len(text) > 20 and text.count(text[:5]) > 4:
             return False
-        # Must contain at least one space (not one giant token).
+        # Non-CJK outputs should contain at least one space (not one giant token).
         if " " not in text:
             return False
         return True
@@ -246,15 +326,19 @@ class GameLLM:
 
     @staticmethod
     def _build_continue_messages(base_messages, partial):
+        system_text = ""
+        if base_messages:
+            system_text = str((base_messages[0] or {}).get("content", ""))
+        user_content = (
+            "你之前的 JSON 被截断了。请从中断处继续，并且只输出一个完整 JSON 对象。"
+            "所有 scene 与 npc_reply 内容必须只使用中文。必须包含所有必需字段。"
+            if _contains_cjk(system_text)
+            else "Your previous JSON was cut off. Continue from where you stopped and "
+            "output one complete JSON object only, including all required keys."
+        )
         return list(base_messages) + [
             {"role": "assistant", "content": partial},
-            {
-                "role": "user",
-                "content": (
-                    "Your previous JSON was cut off. Continue from where you stopped and "
-                    "output one complete JSON object only, including all required keys."
-                ),
-            },
+            {"role": "user", "content": user_content},
         ]
 
     @staticmethod
@@ -401,23 +485,29 @@ class DeepSeekClient:
             logger.warning(f"DeepSeek DM turn failed: {e}")
         return None, False
 
-    def generate_dialogue(self, system_prompt, npc_name, history, player_text):
+    def generate_dialogue(self, system_prompt, npc_name, history, player_text, lang=None):
         """Generate an in-character NPC reply via DeepSeek API."""
+        if lang is None:
+            lang = "zh" if _contains_cjk(system_prompt) or _contains_cjk(player_text) else "en"
         messages = [{"role": "system", "content": system_prompt}]
         for speaker, text in (history or [])[-8:]:
             role = "user" if speaker in ("Player", "player") else "assistant"
             messages.append({"role": role, "content": text})
         messages.append({"role": "user", "content": player_text})
+        messages = _with_language_guard(messages, lang)
         for attempt in range(MAX_RETRIES + 1):
             reply = self._call(messages, DIALOGUE_MAX_TOKENS)
-            if reply and self._quality_ok(reply, player_text):
+            if reply and self._quality_ok(reply, player_text, lang=lang):
                 return reply, True
         return None, False
 
-    def generate_scene(self, world_name, world_description, player_action):
+    def generate_scene(self, world_name, world_description, player_action, lang=None):
         """Generate atmospheric narration via DeepSeek API."""
+        if lang is None:
+            lang = "zh" if _contains_cjk(world_name) or _contains_cjk(world_description) or _contains_cjk(player_action) else "en"
+        system_prompt = SCENE_SYSTEM + ("\n\n" + ZH_LANGUAGE_GUARD if lang == "zh" else "")
         messages = [
-            {"role": "system", "content": SCENE_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
                 f"World: {world_name}\n"
                 f"Setting: {world_description}\n"
@@ -427,7 +517,7 @@ class DeepSeekClient:
         ]
         for attempt in range(MAX_RETRIES + 1):
             scene = self._call(messages, SCENE_MAX_TOKENS)
-            if scene and self._quality_ok(scene, player_action):
+            if scene and self._quality_ok(scene, player_action, lang=lang):
                 return scene
         return None
 
@@ -441,9 +531,11 @@ class DeepSeekClient:
         return text
 
     @staticmethod
-    def _quality_ok(text, player_text):
+    def _quality_ok(text, player_text, lang=None):
         if not text or len(text) < 15:
             return False
+        if lang == "zh":
+            return _contains_cjk(text) and not _has_english_leak(text)
         low = text.lower()
         if player_text and player_text[:20].lower() in low:
             return False
@@ -532,21 +624,27 @@ class RemoteExperienceClient:
             logger.warning(f"Experience proxy DM turn failed: {exc}")
         return None, False
 
-    def generate_dialogue(self, system_prompt, npc_name, history, player_text):
+    def generate_dialogue(self, system_prompt, npc_name, history, player_text, lang=None):
+        if lang is None:
+            lang = "zh" if _contains_cjk(system_prompt) or _contains_cjk(player_text) else "en"
         messages = [{"role": "system", "content": system_prompt}]
         for speaker, text in (history or [])[-8:]:
             role = "user" if speaker in ("Player", "player") else "assistant"
             messages.append({"role": role, "content": text})
         messages.append({"role": "user", "content": player_text})
+        messages = _with_language_guard(messages, lang)
         for _ in range(MAX_RETRIES + 1):
             reply = self._call(messages, DIALOGUE_MAX_TOKENS)
-            if reply and DeepSeekClient._quality_ok(reply, player_text):
+            if reply and DeepSeekClient._quality_ok(reply, player_text, lang=lang):
                 return reply, True
         return None, False
 
-    def generate_scene(self, world_name, world_description, player_action):
+    def generate_scene(self, world_name, world_description, player_action, lang=None):
+        if lang is None:
+            lang = "zh" if _contains_cjk(world_name) or _contains_cjk(world_description) or _contains_cjk(player_action) else "en"
+        system_prompt = SCENE_SYSTEM + ("\n\n" + ZH_LANGUAGE_GUARD if lang == "zh" else "")
         messages = [
-            {"role": "system", "content": SCENE_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": (
                 f"World: {world_name}\n"
                 f"Setting: {world_description}\n"
@@ -556,7 +654,7 @@ class RemoteExperienceClient:
         ]
         for _ in range(MAX_RETRIES + 1):
             scene = self._call(messages, SCENE_MAX_TOKENS)
-            if scene and DeepSeekClient._quality_ok(scene, player_action):
+            if scene and DeepSeekClient._quality_ok(scene, player_action, lang=lang):
                 return scene
         return None
 

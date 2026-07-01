@@ -188,6 +188,7 @@ const confirmActionBtn = document.getElementById("confirm-action-btn");
 let isWaiting = false;
 let currentWorld = "museum";
 let currentMode = "api";
+let settingsModelView = "api";
 let gameEndingTriggered = false;
 let startScreenDismissed = false;
 let galleryPages = [];
@@ -1659,15 +1660,17 @@ function setSettingsStatus(message, type = "") {
     }
 }
 
-function setModeButtonsActive(mode) {
-    currentMode = mode || currentMode;
-    document.querySelectorAll("#model-toggle .toggle-btn").forEach((btn) => {
-        btn.classList.toggle("active", btn.dataset.mode === currentMode);
-    });
-    const selectedOption = SETTINGS_MODEL_OPTIONS.find((option) => option.mode === currentMode) || SETTINGS_MODEL_OPTIONS[0];
+function setSettingsModelView(mode) {
+    settingsModelView = mode || settingsModelView || currentMode;
+    const selectedOption = SETTINGS_MODEL_OPTIONS.find((option) => option.mode === settingsModelView) || SETTINGS_MODEL_OPTIONS[0];
     if (modelProviderValue) modelProviderValue.textContent = t(selectedOption.labelKey);
-    if (deepseekSettingsPanel) deepseekSettingsPanel.classList.toggle("hidden", currentMode !== "api");
-    if (localModelSettingsPanel) localModelSettingsPanel.classList.toggle("hidden", currentMode !== "local");
+    if (deepseekSettingsPanel) deepseekSettingsPanel.classList.toggle("hidden", settingsModelView !== "api");
+    if (localModelSettingsPanel) localModelSettingsPanel.classList.toggle("hidden", settingsModelView !== "local");
+}
+
+function setModeButtonsActive(mode, options = {}) {
+    currentMode = mode || currentMode;
+    setSettingsModelView(options.settingsMode || currentMode);
 }
 
 function setLanguageDisplay() {
@@ -1762,7 +1765,9 @@ function updateLocalModelSettingsStatus(data) {
     } else {
         localModelDot.classList.add("offline");
         localModelStatus.textContent = t("settings.local_model_unavailable");
-        localModelDetail.textContent = t("settings.local_model_unavailable_detail");
+        localModelDetail.textContent = data.local_error
+            ? `${t("settings.local_model_unavailable_detail")} ${t("settings.local_model_diagnostic")} ${data.local_error}`
+            : t("settings.local_model_unavailable_detail");
     }
 }
 
@@ -1771,7 +1776,7 @@ function updateSettingsUi(data) {
     settingsData = data;
     setLanguageDisplay();
     updateTutorialSettingsUi();
-    setModeButtonsActive(data.active_mode || currentMode);
+    setModeButtonsActive(data.active_mode || currentMode, { settingsMode: data.active_mode || currentMode });
     const deepseek = data.deepseek || {};
     updateExperienceSettings(deepseek);
     updatePersonalApiSettings(deepseek);
@@ -1816,9 +1821,7 @@ async function switchModelMode(mode) {
     }
     const previousMode = currentMode;
     setModeButtonsActive(mode);
-    document.querySelectorAll(`[data-mode="${mode}"]`).forEach((btn) => {
-        btn.classList.add("loading");
-    });
+    let failedModeData = null;
 
     try {
         const resp = await fetch("/api/mode", {
@@ -1827,24 +1830,29 @@ async function switchModelMode(mode) {
             body: JSON.stringify({ mode })
         });
         const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || "Mode switch failed");
+        if (!resp.ok) {
+            if (data) {
+                failedModeData = data;
+                updateModelStatus(data, { settingsMode: mode });
+                updateLocalModelSettingsStatus(data);
+            }
+            throw new Error(data.error || "Mode switch failed");
+        }
         updateModelStatus(data);
         await loadSettings(true);
         return data;
     } catch (err) {
         console.error("Mode switch failed:", err);
-        setModeButtonsActive(previousMode);
-        setSettingsStatus(t("errors.mode_switch"), "error");
+        if (!(mode === "local" && failedModeData && failedModeData.local_runtime_ok === false)) {
+            setModeButtonsActive(previousMode);
+        }
+        setSettingsStatus(err.message || t("errors.mode_switch"), "error");
         return null;
-    } finally {
-        document.querySelectorAll(`[data-mode="${mode}"]`).forEach((btn) => {
-            btn.classList.remove("loading");
-        });
     }
 }
 
 function cycleSettingsModel(direction) {
-    const currentIndex = Math.max(0, SETTINGS_MODEL_OPTIONS.findIndex((option) => option.mode === currentMode));
+    const currentIndex = Math.max(0, SETTINGS_MODEL_OPTIONS.findIndex((option) => option.mode === settingsModelView));
     const nextIndex = (currentIndex + direction + SETTINGS_MODEL_OPTIONS.length) % SETTINGS_MODEL_OPTIONS.length;
     switchModelMode(SETTINGS_MODEL_OPTIONS[nextIndex].mode);
 }
@@ -2940,18 +2948,12 @@ panelToggle.addEventListener("click", () => {
     panelToggle.textContent = sidePanel.classList.contains("collapsed") ? t("game.panel_toggle_collapsed") : t("game.panel_toggle");
 });
 
-// ── Model toggle ──
-document.getElementById("model-toggle").addEventListener("click", (e) => {
-    const btn = e.target.closest(".toggle-btn");
-    if (!btn) return;
-    const mode = btn.dataset.mode;
-    switchModelMode(mode);
-});
-
-function updateModelStatus(data) {
+function updateModelStatus(data, options = {}) {
     const mode = data.active_mode || currentMode;
     currentMode = mode;
-    setModeButtonsActive(mode);
+    setModeButtonsActive(mode, {
+        settingsMode: options.settingsMode || (isSettingsOpen() ? settingsModelView : mode)
+    });
     let dotClass = "online";
     let text = "";
     const localProgress = clampPercent(data.local_progress_percent ?? (data.local_ready ? 100 : data.local_loading ? 35 : 0));

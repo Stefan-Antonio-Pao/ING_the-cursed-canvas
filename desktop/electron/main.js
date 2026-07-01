@@ -117,6 +117,40 @@ function waitForHttp(url, timeoutMs = process.platform === "win32" ? 120000 : 45
   });
 }
 
+function probeLocalRuntime(url, timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    const request = http.get(`${url}/api/local-runtime/check`, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        try {
+          const result = JSON.parse(body || "{}");
+          if (result.ok) {
+            appendLog(`Local runtime check ok: torch=${result.torch_version || "unknown"}`);
+          } else {
+            appendLog(`Local runtime check failed: ${result.error_type || "Error"} ${result.error || ""}`);
+          }
+        } catch (_err) {
+          appendLog(`Local runtime check returned non-JSON response: ${body.slice(0, 300)}`);
+        }
+        resolve();
+      });
+    });
+    request.on("error", (err) => {
+      appendLog(`Local runtime check request failed: ${err.message || String(err)}`);
+      resolve();
+    });
+    request.setTimeout(timeoutMs, () => {
+      appendLog("Local runtime check timed out.");
+      request.destroy();
+      resolve();
+    });
+  });
+}
+
 function findFreePort(startPort = 7860) {
   return new Promise((resolve, reject) => {
     let port = startPort;
@@ -235,6 +269,7 @@ async function boot() {
   try {
     const url = await startBackend(config);
     await Promise.race([waitForHttp(url), backendStartupExitPromise]);
+    probeLocalRuntime(url);
     await mainWindow.loadURL(url);
   } catch (err) {
     appendLog(`Startup failed: ${err.message || String(err)}`);
