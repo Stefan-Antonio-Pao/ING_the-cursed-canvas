@@ -923,9 +923,7 @@ def index():
     if not existing_state:
         _save_session_game_state(GameState())
     session["llm_mode"] = _active_mode
-    if not _llm_ready and not _llm_loading:
-        threading.Thread(target=_warmup_async, daemon=True).start()
-    return render_template("index.html")
+    return render_template("index.html", initial_lang=g.lang)
 
 
 @app.route("/api/command", methods=["POST"])

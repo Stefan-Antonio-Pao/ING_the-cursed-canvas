@@ -4,20 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title id="page-title">The Cursed Canvas</title>
-    <link rel="stylesheet" href="/static/style.css?v=quick-actions-order-20260630">
+    <script>
+        (function () {
+            var lang = "{{ initial_lang|default('en') }}";
+            try {
+                var stored = localStorage.getItem("cursed_canvas_lang");
+                var browser = (navigator.language || navigator.userLanguage || "").toLowerCase();
+                lang = stored || lang || (browser.indexOf("zh") === 0 ? "zh" : "en");
+            } catch (_err) {
+                lang = lang || "en";
+            }
+            lang = lang === "zh" ? "zh" : "en";
+            document.documentElement.setAttribute("data-preload-lang", lang);
+            document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/style.css?v=preload-screen-20260701">
 </head>
-<body data-world="museum">
+<body data-world="museum" class="is-preloading">
     <!-- Background layers -->
     <div id="parallax-bg"></div>
     <canvas id="particles-canvas"></canvas>
     <div id="world-transition" class="hidden"></div>
 
     <!-- Loading overlay -->
-    <div id="loading-overlay">
+    <div id="loading-overlay" role="status" aria-live="polite" aria-label="Loading">
         <div id="loading-box">
-            <h2 data-i18n="start.title">The Cursed Canvas</h2>
-            <p id="loading-msg">Preparing the museum...</p>
-            <div id="loading-spinner"></div>
+            <p class="loading-kicker">
+                <span data-preload-lang="en">Midnight Museum</span>
+                <span data-preload-lang="zh">午夜博物馆</span>
+            </p>
+            <h2 id="loading-title">
+                <span data-preload-lang="en">The Cursed Canvas</span>
+                <span data-preload-lang="zh">被诅咒的画布</span>
+            </h2>
+            <div class="loading-progress" aria-hidden="true">
+                <span id="loading-progress-bar" style="width: 6%;"></span>
+            </div>
+            <p id="loading-msg">
+                <span data-preload-lang="en">Preparing the museum...</span>
+                <span data-preload-lang="zh">正在准备博物馆……</span>
+            </p>
         </div>
     </div>
 
@@ -413,6 +440,6 @@ function applyI18N() {
     });
 }
 </script>
-    <script src="/static/game.js?v=quick-actions-order-20260630"></script>
+    <script src="/static/game.js?v=preload-screen-20260701"></script>
 </body>
 </html>

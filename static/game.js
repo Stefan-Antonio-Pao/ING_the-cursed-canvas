@@ -21,6 +21,7 @@ async function initI18N(targetLang) {
     const resp = await fetch(`/api/i18n/${targetLang}`, { cache: "no-store" });
     if (!resp.ok) throw new Error(`Failed to load i18n for ${targetLang}`);
     window.I18N = await resp.json();
+    syncPreloadLanguage(window.I18N.lang || targetLang);
     return window.I18N;
 }
 
@@ -39,7 +40,74 @@ function t(path, replacements = {}) {
     return value;
 }
 
+const PRELOAD_FALLBACK_TEXT = {
+    en: {
+        settings: "Checking saved settings...",
+        language: "Loading language resources...",
+        interface: "Localizing the interface...",
+        saves: "Preparing save slots...",
+        state: "Checking adventure state...",
+        scene: "Preparing the midnight museum...",
+        effects: "Warming up visual effects...",
+        ready: "Entering the museum..."
+    },
+    zh: {
+        settings: "正在检查已保存设置……",
+        language: "正在加载语言资源……",
+        interface: "正在本地化界面……",
+        saves: "正在准备存档槽位……",
+        state: "正在检查冒险状态……",
+        scene: "正在准备午夜博物馆……",
+        effects: "正在预热视觉效果……",
+        ready: "即将进入博物馆……"
+    }
+};
+
+function syncPreloadLanguage(lang) {
+    const normalized = lang === "zh" ? "zh" : "en";
+    document.documentElement.setAttribute("data-preload-lang", normalized);
+    document.documentElement.lang = normalized === "zh" ? "zh-CN" : "en";
+}
+
+function preloadText(key) {
+    const lang = (window.I18N && window.I18N.lang === "zh") || document.documentElement.getAttribute("data-preload-lang") === "zh" ? "zh" : "en";
+    const localized = window.I18N && window.I18N.preload && window.I18N.preload[key];
+    return localized || PRELOAD_FALLBACK_TEXT[lang][key] || PRELOAD_FALLBACK_TEXT.en[key] || "";
+}
+
+function setPreloadStage(key, progress) {
+    const msg = document.getElementById("loading-msg");
+    const bar = document.getElementById("loading-progress-bar");
+    if (msg) msg.textContent = preloadText(key);
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, Math.round(progress)))}%`;
+}
+
+function finishPreloadOverlay() {
+    setPreloadStage("ready", 100);
+    window.setTimeout(() => {
+        document.body.classList.add("preload-complete");
+        if (loadingOverlay) {
+            loadingOverlay.classList.add("hidden");
+            window.setTimeout(() => {
+                if (loadingOverlay.parentNode) loadingOverlay.remove();
+                document.body.classList.remove("is-preloading", "preload-complete");
+            }, 760);
+        } else {
+            document.body.classList.remove("is-preloading", "preload-complete");
+        }
+        if (titleContinue && window.I18N && window.I18N.title_screen) {
+            titleContinue.textContent = window.I18N.title_screen.continue_prompt;
+        }
+    }, 260);
+}
+
 async function switchLanguage(lang) {
+    if (languageSwitchBusy) return;
+    const currentLang = window.I18N && window.I18N.lang ? window.I18N.lang : null;
+    if (lang && currentLang === lang) return;
+    languageSwitchBusy = true;
+    if (languagePrevBtn) languagePrevBtn.disabled = true;
+    if (languageNextBtn) languageNextBtn.disabled = true;
     try {
         const resp = await fetch("/api/language", {
             method: "POST",
@@ -57,6 +125,10 @@ async function switchLanguage(lang) {
         await loadSettings(true);
     } catch (err) {
         console.error("Language switch error:", err);
+    } finally {
+        languageSwitchBusy = false;
+        if (languagePrevBtn) languagePrevBtn.disabled = false;
+        if (languageNextBtn) languageNextBtn.disabled = false;
     }
 }
 
@@ -196,6 +268,7 @@ let galleryPageIndex = 0;
 let galleryIsLoading = false;
 let settingsData = null;
 let settingsBusy = false;
+let languageSwitchBusy = false;
 let settingsReturnTarget = "menu";
 let gameInputWasEnabledBeforeSettings = false;
 let newAdventureFlowActive = false;
@@ -3233,12 +3306,6 @@ async function checkModelStatus() {
         if (!r.ok) return;
         const s = await r.json();
 
-        // Hide loading overlay (game is always ready now)
-        if (s.game_ready && loadingOverlay) {
-            loadingOverlay.classList.add("hidden");
-            setTimeout(() => { if (loadingOverlay.parentNode) loadingOverlay.remove(); }, 500);
-        }
-
         updateModelStatus(s);
 
         // Notify when local model comes online
@@ -3290,6 +3357,7 @@ function showEndPageButton() {
 // ══════════════════════════════════════════════════════════════
 
 window.addEventListener("load", async () => {
+    setPreloadStage("settings", 12);
     // Language: localStorage is authoritative for persistence across sessions
     const storedLang = localStorage.getItem("cursed_canvas_lang");
     let initialLang = storedLang || null;
@@ -3322,6 +3390,8 @@ window.addEventListener("load", async () => {
     if (!initialLang) {
         initialLang = "en";
     }
+    syncPreloadLanguage(initialLang);
+    setPreloadStage("language", 28);
     try {
         await initI18N(initialLang);
     } catch (e) {
@@ -3329,13 +3399,16 @@ window.addEventListener("load", async () => {
         try { await initI18N("en"); } catch (e2) { /* ignore */ }
     }
     // Apply I18N to HTML immediately after init, before any view rendering
+    setPreloadStage("interface", 44);
     if (typeof applyI18N === "function") applyI18N();
     updateTutorialSettingsUi();
     renderTutorialSurfaces();
 
+    setPreloadStage("saves", 58);
     await migrateBrowserSaveSlots();
 
     // Check if returning from ending page (existing game state)
+    setPreloadStage("state", 68);
     let isReturning = false;
     try {
         const resp = await fetch("/api/status");
@@ -3347,6 +3420,7 @@ window.addEventListener("load", async () => {
         }
     } catch (e) { /* ignore */ }
 
+    setPreloadStage("scene", 78);
     if (isReturning) {
         titleScreenDismissed = true;
         if (titleScreen) titleScreen.classList.add("hidden");
@@ -3381,6 +3455,7 @@ window.addEventListener("load", async () => {
     }
 
     // Initialize particles
+    setPreloadStage("effects", 88);
     setParticleWorld("museum");
     updateParticles();
 
@@ -3390,17 +3465,7 @@ window.addEventListener("load", async () => {
     // Start polling
     pollLoop();
 
-    // Hide loading overlay quickly (game is ready with API mode)
-    setTimeout(() => {
-        if (loadingOverlay) {
-            loadingOverlay.classList.add("hidden");
-            setTimeout(() => { if (loadingOverlay.parentNode) loadingOverlay.remove(); }, 500);
-        }
-        // Update title screen continue prompt with i18n when fading in
-        if (titleContinue && window.I18N && window.I18N.title_screen) {
-            titleContinue.textContent = window.I18N.title_screen.continue_prompt;
-        }
-    }, 800);
+    finishPreloadOverlay();
 });
 
 window.addEventListener("storage", (e) => {

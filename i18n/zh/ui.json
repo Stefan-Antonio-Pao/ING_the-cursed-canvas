@@ -6,6 +6,16 @@
     "title": "被诅咒的画布",
     "continue_prompt": "按任意键继续"
   },
+  "preload": {
+    "settings": "正在检查已保存设置……",
+    "language": "正在加载语言资源……",
+    "interface": "正在本地化界面……",
+    "saves": "正在准备存档槽位……",
+    "state": "正在检查冒险状态……",
+    "scene": "正在准备午夜博物馆……",
+    "effects": "正在预热视觉效果……",
+    "ready": "即将进入博物馆……"
+  },
   "start": {
     "title": "被诅咒的画布",
     "kicker": "午夜博物馆",

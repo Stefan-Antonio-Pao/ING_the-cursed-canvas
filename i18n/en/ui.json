@@ -6,6 +6,16 @@
     "title": "The Cursed Canvas",
     "continue_prompt": "Press any key to continue"
   },
+  "preload": {
+    "settings": "Checking saved settings...",
+    "language": "Loading language resources...",
+    "interface": "Localizing the interface...",
+    "saves": "Preparing save slots...",
+    "state": "Checking adventure state...",
+    "scene": "Preparing the midnight museum...",
+    "effects": "Warming up visual effects...",
+    "ready": "Entering the museum..."
+  },
   "start": {
     "title": "The Cursed Canvas",
     "kicker": "Midnight Museum",
