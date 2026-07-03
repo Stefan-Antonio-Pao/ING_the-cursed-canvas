@@ -61,6 +61,27 @@ class GreatWaveSequenceTests(unittest.TestCase):
         self.assertIn("安宁石", response["scene"])
         self.assertNotIn("画作已被修复", response["scene"])
 
+    def test_zh_asking_about_flute_does_not_auto_pick_it_up(self):
+        g.lang = "zh"
+        gs = GameState()
+        gs.current_world = "great_wave"
+        gs.visited_worlds.add("great_wave")
+        gs._first_turn = False
+
+        response = gs.process_dm_response({
+            "intent": "use_item",
+            "scene": "你转向葛饰北斋，询问海螺笛在哪里。",
+            "npc_reply": "那海螺笛就在你眼前，它曾是海浪的低语，如今在等待你拾起。",
+            "npc_name": "葛饰北斋",
+            "mood": "neutral",
+            "move_target": None,
+            "player_command": "海螺笛在哪里呢",
+        })
+
+        self.assertNotIn("shell_flute", gs.inventory)
+        self.assertNotIn("shell_flute", gs.items_found)
+        self.assertNotIn("海螺笛", response["inventory"])
+
     def test_zh_combined_harmony_after_pickup_completes_quest(self):
         gs = self._state_with_flute("zh")
         gs.inventory.append("calming_stone")

@@ -40,7 +40,10 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.games"
+      "category": "public.app-category.games",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "The Cursed Canvas uses the microphone only when you press Voice Input, to transcribe your spoken command inside the app."
+      }
     },
     "win": {
       "icon": "desktop/assets/icon.ico",

@@ -27,6 +27,7 @@ GENERATION_TIMEOUT = 10
 MAX_RETRIES = 1
 DIALOGUE_MAX_TOKENS = 150
 SCENE_MAX_TOKENS = 120
+VOICE_CORRECTION_MAX_TOKENS = 120
 DM_MAX_TOKENS = 1100
 DM_COMPLETION_RETRIES = 2
 
@@ -358,6 +359,16 @@ class GameLLM:
         ]
         return all(k in s for k in required)
 
+    def generate_voice_correction(self, messages):
+        """Rewrite a speech transcript for the command box."""
+        try:
+            text = self._run(messages, VOICE_CORRECTION_MAX_TOKENS, trim=False)
+            if text:
+                return text.strip(), True
+        except Exception as e:
+            logger.warning(f"Local voice correction failed: {e}")
+        return None, False
+
 
 _llm_instance = None
 _llm_lock = threading.Lock()
@@ -521,6 +532,16 @@ class DeepSeekClient:
                 return scene
         return None
 
+    def generate_voice_correction(self, messages):
+        """Rewrite a speech transcript for the command box via DeepSeek API."""
+        try:
+            text = self._call(messages, VOICE_CORRECTION_MAX_TOKENS, timeout=12, trim=False)
+            if text:
+                return text.strip(), True
+        except Exception as e:
+            logger.warning(f"DeepSeek voice correction failed: {e}")
+        return None, False
+
     @staticmethod
     def _trim(text):
         if not text:
@@ -657,6 +678,15 @@ class RemoteExperienceClient:
             if scene and DeepSeekClient._quality_ok(scene, player_action, lang=lang):
                 return scene
         return None
+
+    def generate_voice_correction(self, messages):
+        try:
+            text = self._call(messages, VOICE_CORRECTION_MAX_TOKENS, timeout=20, trim=False)
+            if text:
+                return text.strip(), True
+        except Exception as exc:
+            logger.warning(f"Experience proxy voice correction failed: {exc}")
+        return None, False
 
 
 # ------------------------------------------------------------------ #

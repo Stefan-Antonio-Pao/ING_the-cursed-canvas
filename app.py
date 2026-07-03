@@ -14,7 +14,7 @@ load_dotenv()
 
 import os, json, secrets, logging, threading, time, atexit, socket
 from engine.story_engine import GameState
-from engine.world_data import load_world_data, get_world, get_npc, get_world_name, get_item_name
+from engine.world_data import load_world_data, get_world, get_npc, get_item, get_world_name, get_item_name
 from ai.intent import IntentClassifier
 from ai.sentiment import analyze_sentiment
 from ai.dm_prompt import build_dm_prompt, parse_dm_response
@@ -50,6 +50,26 @@ _api_fail_count = 0
 _api_broken_until = 0  # timestamp: 0 = not broken
 _API_FAIL_THRESHOLD = 2  # after N consecutive failures, mark broken
 _API_COOLDOWN_SECONDS = 30  # skip API for this long after marked broken
+_VOICE_CORRECTION_LEVELS = {"low", "balanced", "high"}
+_VOICE_CORRECTION_DEFAULT = "balanced"
+_VOICE_CORRECTION_BACKENDS = {"auto", "local", "online"}
+_VOICE_CORRECTION_BACKEND_DEFAULT = "auto"
+try:
+    _VOICE_AUDIO_MAX_BYTES = int(os.getenv("VOICE_AUDIO_MAX_BYTES", str(8 * 1024 * 1024)))
+except ValueError:
+    _VOICE_AUDIO_MAX_BYTES = 8 * 1024 * 1024
+_VOICE_AUDIO_MAX_BYTES = max(1024, _VOICE_AUDIO_MAX_BYTES)
+_voice_stt_ready = False
+_voice_stt_loading = False
+_voice_stt_error = None
+_voice_stt_model = None
+_voice_stt_source = None
+_voice_stt_warmup_started_at = 0
+_voice_runtime_checked = False
+_voice_runtime_ok = None
+_voice_runtime_error = None
+_voice_runtime_error_type = None
+_voice_stt_lock = threading.Lock()
 
 def _init_classifier():
     """Load the lightweight ML classifiers (sub-second, no network)."""
@@ -475,6 +495,1001 @@ def _get_deepseek_client_for_current_settings():
     return get_llm_client("api", api_key=api_key)
 
 
+def _voice_settings_payload():
+    strength = session.get("voice_correction_strength", _VOICE_CORRECTION_DEFAULT)
+    if strength not in _VOICE_CORRECTION_LEVELS:
+        strength = _VOICE_CORRECTION_DEFAULT
+    backend = session.get("voice_correction_backend", _VOICE_CORRECTION_BACKEND_DEFAULT)
+    if backend not in _VOICE_CORRECTION_BACKENDS:
+        backend = _VOICE_CORRECTION_BACKEND_DEFAULT
+    return {
+        "correction_strength": strength,
+        "correction_backend": backend,
+        "auto_send": bool(session.get("voice_auto_send", False)),
+    }
+
+
+def _apply_voice_settings(voice_data):
+    if not isinstance(voice_data, dict):
+        return None
+    strength = voice_data.get("correction_strength")
+    backend = voice_data.get("correction_backend")
+    auto_send = voice_data.get("auto_send")
+    if strength is not None:
+        if strength not in _VOICE_CORRECTION_LEVELS:
+            return f"Invalid voice correction strength: {strength}"
+        session["voice_correction_strength"] = strength
+    if backend is not None:
+        if backend not in _VOICE_CORRECTION_BACKENDS:
+            return f"Invalid voice correction backend: {backend}"
+        session["voice_correction_backend"] = backend
+    if auto_send is not None:
+        session["voice_auto_send"] = bool(auto_send)
+    return None
+
+
+def _normalize_voice_text(text):
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    return re.sub(r"([\u3400-\u9fff])\s+([\u3400-\u9fff])", r"\1\2", normalized)
+
+
+def _clean_voice_correction(text):
+    cleaned = _normalize_voice_text(text)
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"^```(?:\w+)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = re.sub(r"^(?:corrected|command|transcript|result)\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip().strip("\"'`")
+    return cleaned[:300].strip()
+
+
+_VOICE_ZH_TRANSLATION = str.maketrans({
+    "選": "选", "擇": "择", "尋": "寻", "聲": "声", "與": "与", "兩": "两",
+    "這": "这", "裡": "里", "裏": "里", "畫": "画", "顏": "颜", "燈": "灯",
+    "籠": "笼", "風": "风", "樂": "乐", "說": "说", "話": "话", "問": "问",
+    "讓": "让", "還": "还", "復": "复", "歸": "归", "寧": "宁", "現": "现",
+    "顯": "显", "敵": "敌", "個": "个", "隻": "只", "萬": "万", "應": "应", "該": "该",
+    "麼": "么", "為": "为", "從": "从", "進": "进", "離": "离", "開": "开",
+    "點": "点", "舉": "举", "撿": "捡", "檢": "检", "觀": "观", "邊": "边",
+    "處": "处", "沖": "冲", "濤": "涛", "霧": "雾", "鏡": "镜",
+    "當": "当", "語": "语", "測": "测", "試": "试", "準": "准", "確": "确",
+    "況": "况", "錄": "录", "環": "环", "境": "境", "無": "无", "識": "识",
+    "別": "别", "嘗": "尝", "輸": "输", "入": "入", "強": "强", "轉": "转",
+    "寫": "写", "麥": "麦", "啟": "启", "權": "权", "絕": "绝", "暫": "暂",
+    "網": "网", "絡": "络", "查": "查", "後": "后", "館": "馆",
+    "覽": "览", "欄": "栏", "體": "体", "驗": "验", "線": "线", "剩": "剩",
+    "餘": "余", "鑰": "钥", "擊": "击", "雙": "双", "發": "发",
+    "項": "项", "隱": "隐", "藏": "藏", "獲": "获", "讀": "读", "態": "态",
+    "慣": "惯", "嗎": "吗", "喚": "唤", "歲": "岁", "壓": "压",
+    "爲": "为", "幫": "帮", "將": "将", "於": "于", "內": "内", "勞": "劳",
+    "齋": "斋", "質": "质", "員": "员", "鳴": "鸣", "認": "认", "總": "总",
+    "樣": "样", "數": "数", "嘍": "喽", "夥": "伙", "夠": "够", "獨": "独",
+    "顧": "顾", "蹤": "踪", "跡": "迹", "藝": "艺", "館": "馆", "濾": "滤",
+})
+
+_VOICE_ZH_TERM_REPLACEMENTS = (
+    ("克勞德·莫奈", "克劳德·莫奈"),
+    ("克劳德莫奈", "克劳德·莫奈"),
+    ("克洛德·莫奈", "克劳德·莫奈"),
+    ("克洛德莫奈", "克劳德·莫奈"),
+    ("克劳德摩奈", "克劳德·莫奈"),
+    ("克洛德摩奈", "克劳德·莫奈"),
+    ("葛飾北齋", "葛饰北斋"),
+    ("葛飾北斋", "葛饰北斋"),
+    ("葛饰北齋", "葛饰北斋"),
+    ("葛式北斋", "葛饰北斋"),
+    ("各式北斋", "葛饰北斋"),
+    ("各式北战", "葛饰北斋"),
+    ("格式北斋", "葛饰北斋"),
+    ("隔世北斋", "葛饰北斋"),
+    ("隔饰北斋", "葛饰北斋"),
+    ("葛饰北战", "葛饰北斋"),
+    ("葛饰北在", "葛饰北斋"),
+    ("控制纯之考案并且调一下试", "问葛饰北斋"),
+    ("控制纯之考案", "葛饰北斋"),
+    ("调一下试", "问一下"),
+    ("文森特凡高", "文森特·梵高"),
+    ("文森特梵高", "文森特·梵高"),
+    ("文森特·凡高", "文森特·梵高"),
+    ("恩皮西", "NPC"),
+    ("非玩家角色", "NPC"),
+    ("演算", "颜色"),
+    ("顏色", "颜色"),
+    ("原色", "颜色"),
+    ("沙灿", "沙滩"),
+    ("沙谭", "沙滩"),
+    ("沙潭", "沙滩"),
+    ("沙坛", "沙滩"),
+    ("沙摊", "沙滩"),
+    ("砂滩", "沙滩"),
+    ("砂潭", "沙滩"),
+    ("星空之夜", "星月夜"),
+    ("星空夜", "星月夜"),
+    ("新月夜", "星月夜"),
+    ("心月夜", "星月夜"),
+    ("星越夜", "星月夜"),
+    ("新越夜", "星月夜"),
+    ("心越夜", "星月夜"),
+    ("兴月夜", "星月夜"),
+    ("兴越夜", "星月夜"),
+    ("行月夜", "星月夜"),
+    ("星悦夜", "星月夜"),
+    ("新悦夜", "星月夜"),
+    ("心悦夜", "星月夜"),
+    ("星岳夜", "星月夜"),
+    ("新岳夜", "星月夜"),
+    ("心岳夜", "星月夜"),
+    ("星月也", "星月夜"),
+    ("新月也", "星月夜"),
+    ("星越也", "星月夜"),
+    ("新越也", "星月夜"),
+    ("星月页", "星月夜"),
+    ("星月叶", "星月夜"),
+    ("星月液", "星月夜"),
+    ("星越义", "星月夜"),
+    ("新越义", "星月夜"),
+    ("心越义", "星月夜"),
+    ("兴越义", "星月夜"),
+    ("星乐夜", "星月夜"),
+    ("新乐夜", "星月夜"),
+    ("心乐夜", "星月夜"),
+    ("星乐业", "星月夜"),
+    ("新乐业", "星月夜"),
+    ("星夜", "星月夜"),
+    ("凡高", "梵高"),
+    ("繁高", "梵高"),
+    ("烦高", "梵高"),
+    ("范高", "梵高"),
+    ("番高", "梵高"),
+    ("文森梵高", "梵高"),
+    ("神奈川冲浪裏", "神奈川冲浪里"),
+    ("神奈川冲浪裡", "神奈川冲浪里"),
+    ("神奈川冲浪理", "神奈川冲浪里"),
+    ("神奈川冲浪礼", "神奈川冲浪里"),
+    ("神奈川冲浪力", "神奈川冲浪里"),
+    ("神奈川冲浪立", "神奈川冲浪里"),
+    ("神奈川冲浪丽", "神奈川冲浪里"),
+    ("神奈川冲浪离", "神奈川冲浪里"),
+    ("神奈川冲浪", "神奈川冲浪里"),
+    ("神奈穿冲浪里", "神奈川冲浪里"),
+    ("神内川冲浪里", "神奈川冲浪里"),
+    ("深奈川冲浪里", "神奈川冲浪里"),
+    ("神奈川", "神奈川冲浪里"),
+    ("冲浪里", "神奈川冲浪里"),
+    ("冲浪理", "神奈川冲浪里"),
+    ("冲浪力", "神奈川冲浪里"),
+    ("冲浪立", "神奈川冲浪里"),
+    ("冲浪丽", "神奈川冲浪里"),
+    ("冲浪离", "神奈川冲浪里"),
+    ("北齐", "北斋"),
+    ("北宅", "北斋"),
+    ("北战", "北斋"),
+    ("葛饰北齐", "葛饰北斋"),
+    ("葛饰北宅", "葛饰北斋"),
+    ("印象日出", "印象·日出"),
+    ("印像日出", "印象·日出"),
+    ("映像日出", "印象·日出"),
+    ("映象日出", "印象·日出"),
+    ("印象日处", "印象·日出"),
+    ("印象日初", "印象·日出"),
+    ("印象一出", "印象·日出"),
+    ("印象日出画", "印象·日出"),
+    ("莫内", "莫奈"),
+    ("莫內", "莫奈"),
+    ("摩奈", "莫奈"),
+    ("莫耐", "莫奈"),
+    ("摩耐", "莫奈"),
+    ("磨耐", "莫奈"),
+    ("海洛笛", "海螺笛"),
+    ("海洛敌", "海螺笛"),
+    ("海洛底", "海螺笛"),
+    ("海罗笛", "海螺笛"),
+    ("海螺滴", "海螺笛"),
+    ("海螺敌", "海螺笛"),
+    ("海螺底", "海螺笛"),
+    ("海螺迪", "海螺笛"),
+    ("海螺第", "海螺笛"),
+    ("海螺地", "海螺笛"),
+    ("前期海螺笛", "拾取海螺笛"),
+    ("前妻海螺笛", "拾取海螺笛"),
+    ("钱起海螺笛", "拾取海螺笛"),
+    ("提取海螺笛", "拾取海螺笛"),
+    ("时期海螺笛", "拾取海螺笛"),
+    ("十取海螺笛", "拾取海螺笛"),
+    ("食取海螺笛", "拾取海螺笛"),
+    ("螺笛", "海螺笛"),
+    ("贝壳笛", "海螺笛"),
+    ("贝壳长笛", "海螺笛"),
+    ("安宁时", "安宁石"),
+    ("安宁是", "安宁石"),
+    ("安凝石", "安宁石"),
+    ("安定石", "安宁石"),
+    ("平静石", "安宁石"),
+    ("镇静石", "安宁石"),
+    ("魔法灯", "魔法灯笼"),
+    ("星光灯笼", "魔法灯笼"),
+    ("黄颜料", "黄色颜料"),
+    ("黄色染料", "黄色颜料"),
+    ("黄色原料", "黄色颜料"),
+    ("雾镜", "雾透镜"),
+    ("雾透境", "雾透镜"),
+    ("雾透静", "雾透镜"),
+    ("雾透进", "雾透镜"),
+    ("雾镜片", "雾透镜"),
+    ("迷雾透镜", "雾透镜"),
+    ("橙色颜料", "日出颜料"),
+    ("日出染料", "日出颜料"),
+    ("日出原料", "日出颜料"),
+)
+
+_VOICE_WORLD_ZH_CONTEXT_TERMS = {
+    "starry_night": (("灯笼", "魔法灯笼"), ("灯", "魔法灯笼"), ("颜料", "黄色颜料")),
+    "great_wave": (
+        ("笛子", "海螺笛"), ("长笛", "海螺笛"), ("笛", "海螺笛"),
+        ("石头", "安宁石"), ("沙地", "沙滩"), ("岸边", "沙滩"),
+    ),
+    "impression_sunrise": (("透镜", "雾透镜"), ("镜片", "雾透镜"), ("镜", "雾透镜"), ("颜料", "日出颜料")),
+}
+
+_VOICE_EN_TERM_REPLACEMENTS = (
+    ("non player character", "NPC"),
+    ("non-player character", "NPC"),
+    ("n p c", "NPC"),
+    ("clawed monet", "Claude Monet"),
+    ("claude monay", "Claude Monet"),
+    ("claude money", "Claude Monet"),
+    ("vincent van go", "Vincent van Gogh"),
+    ("vincent van golf", "Vincent van Gogh"),
+    ("hook aside", "Hokusai"),
+    ("who kusai", "Hokusai"),
+    ("hoku sigh", "Hokusai"),
+    ("beech", "beach"),
+    ("sand bank", "beach"),
+    ("sandy bank", "beach"),
+    ("shore side", "shore"),
+    ("starry knight", "starry night"),
+    ("starry nite", "starry night"),
+    ("starry nights", "starry night"),
+    ("star night", "starry night"),
+    ("starry sky", "starry night"),
+    ("new moon night", "starry night"),
+    ("great waive", "great wave"),
+    ("gray wave", "great wave"),
+    ("great waves", "great wave"),
+    ("kanagawa wave", "great wave"),
+    ("impression sun rise", "impression sunrise"),
+    ("impression of sunrise", "impression sunrise"),
+    ("monay", "monet"),
+    ("show flute", "shell flute"),
+    ("shell fluke", "shell flute"),
+    ("shell fluid", "shell flute"),
+    ("shell flew", "shell flute"),
+    ("seashell flute", "shell flute"),
+    ("conch flute", "shell flute"),
+    ("magic lantern", "enchanted lantern"),
+    ("starlight lantern", "enchanted lantern"),
+    ("calm stone", "calming stone"),
+    ("common stone", "calming stone"),
+    ("coming stone", "calming stone"),
+    ("yellow paint", "yellow pigment"),
+    ("yellow color", "yellow pigment"),
+    ("stolen yellow paint", "yellow pigment"),
+    ("fog lens", "mist lens"),
+    ("miss lens", "mist lens"),
+    ("missed lens", "mist lens"),
+    ("misty lens", "mist lens"),
+    ("orange pigment", "sunrise pigment"),
+    ("sunrise paint", "sunrise pigment"),
+)
+
+_VOICE_WORLD_EN_CONTEXT_TERMS = {
+    "starry_night": (("lantern", "enchanted lantern"), ("pigment", "yellow pigment"), ("paint", "yellow pigment")),
+    "great_wave": (("flute", "shell flute"), ("stone", "calming stone"), ("bank", "beach"), ("shoreline", "shore")),
+    "impression_sunrise": (("lens", "mist lens"), ("pigment", "sunrise pigment"), ("paint", "sunrise pigment")),
+}
+
+_VOICE_ZH_ACTION_MARKERS = (
+    "寻找", "找", "搜索", "搜寻", "选择", "选", "查看", "检查", "观察", "调查",
+    "四处", "环顾", "看看", "前往", "进入", "回到", "返回", "离开", "退出",
+    "去", "进去", "进到", "到", "走进", "走向", "走到", "步入", "跨进", "跨入",
+    "穿过", "穿入", "拿起", "拿走", "取走", "拾取", "捡起", "拿",
+    "使用", "用", "吹奏", "吹响", "演奏", "吹", "举起", "打开", "物品栏",
+    "帮助", "提示", "修复", "恢复", "平息", "安抚", "完成", "归还", "和鸣",
+    "共鸣", "合奏", "同时使用", "让",
+)
+
+_VOICE_EN_ACTION_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"find|search(?:\s+for)?|look(?:\s+for|\s+around)?|inspect|examine|check|investigate|"
+    r"go|move|enter|return|leave|exit|walk|step|head|travel|visit|"
+    r"choose|select|take|pick\s+up|grab|collect|get|use|apply|play|blow|show|offer|give|"
+    r"open|inventory|help|hint|solve|restore|fix|calm|soothe|complete|combine|harmonize|resonate"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_VOICE_KNOWN_ITEM_ALIASES = {
+    "lantern": {
+        "enchanted lantern", "magic lantern", "starlight lantern", "lantern",
+        "魔法灯笼", "灯笼", "灯", "星光灯笼",
+    },
+    "yellow_pigment": {
+        "yellow pigment", "yellow paint", "stolen yellow pigment", "stolen yellow paint", "pigment",
+        "starlight", "stolen starlight", "yellow starlight",
+        "黄色颜料", "黄颜料", "黄色染料", "颜料", "星光", "失窃星光", "被偷走的星光", "黄色星光",
+    },
+    "shell_flute": {
+        "shell flute", "seashell flute", "conch flute", "flute",
+        "海螺笛", "海螺", "螺笛", "笛子", "长笛", "笛", "贝壳笛",
+    },
+    "calming_stone": {
+        "calming stone", "calm stone", "stone",
+        "安宁石", "安宁", "石头", "平静石", "镇静石",
+    },
+    "mist_lens": {
+        "mist lens", "fog lens", "misty lens", "lens",
+        "雾透镜", "透镜", "镜片", "镜", "雾镜",
+    },
+    "sunrise_pigment": {
+        "sunrise pigment", "orange pigment", "sunrise paint", "pigment",
+        "日出颜料", "橙色颜料", "日出染料", "颜料",
+    },
+}
+
+_VOICE_KNOWN_WORLD_ALIASES = {
+    "museum": {
+        "museum", "gallery", "hall", "enchanted museum",
+        "博物馆", "魔法博物馆", "画廊", "展厅", "大厅",
+    },
+    "starry_night": {
+        "starry night", "starry knight", "starry sky", "star night", "van gogh", "vincent",
+        "星月夜", "新月夜", "星夜", "星空", "梵高", "凡高", "文森特", "文森特·梵高",
+    },
+    "great_wave": {
+        "great wave", "the great wave", "kanagawa", "hokusai", "wave", "sea", "ocean", "beach", "shore",
+        "神奈川冲浪里", "神奈川冲浪", "神奈川", "冲浪里", "冲浪", "海浪", "巨浪", "北斋", "葛饰北斋",
+        "大海", "海洋", "沙滩", "岸边", "海岸", "礁石",
+    },
+    "impression_sunrise": {
+        "impression sunrise", "impression, sunrise", "sunrise", "monet", "claude monet", "harbor", "havre", "mist",
+        "印象·日出", "印象日出", "印象", "日出", "莫奈", "莫内", "克劳德·莫奈", "港口", "勒阿弗尔", "雾", "颜色",
+    },
+}
+
+_VOICE_EN_DIALOGUE_RE = re.compile(
+    r"^(?:please\s+)?(?:where|what|why|how|who|when|which|can\s+you|could\s+you|would\s+you|"
+    r"do\s+you|does|is\s+there|are\s+there|tell\s+me|ask|talk|speak|say|chat|greet)\b",
+    re.IGNORECASE,
+)
+
+
+def _voice_to_simplified_zh(text):
+    return str(text or "").translate(_VOICE_ZH_TRANSLATION)
+
+
+def _voice_strip_action_wrappers(text):
+    cleaned = str(text or "").strip()
+    if ((cleaned.startswith("(") and cleaned.endswith(")")) or
+            (cleaned.startswith("（") and cleaned.endswith("）"))):
+        inner = cleaned[1:-1].strip()
+        return inner or cleaned
+    return cleaned
+
+
+def _voice_current_world(game_state):
+    return getattr(game_state, "current_world", "museum") if game_state else "museum"
+
+
+def _replace_case_insensitive_phrase(text, wrong, correct):
+    return re.sub(rf"\b{re.escape(wrong)}\b", correct, text, flags=re.IGNORECASE)
+
+
+def _repair_zh_action_homophones(text):
+    item_terms = (
+        "海螺笛", "安宁石", "魔法灯笼", "黄色颜料", "雾透镜", "日出颜料",
+        "灯笼", "颜料", "透镜", "石头", "笛子", "长笛",
+    )
+    term_group = "|".join(re.escape(term) for term in sorted(item_terms, key=len, reverse=True))
+    pickup_prefix = r"(?:前期|前妻|钱起|提取|时期|十取|食取|拾起|捡取|检取)"
+    corrected = re.sub(rf"^(?:{pickup_prefix})(?=({term_group}))", "拾取", text)
+    corrected = re.sub(rf"(?<=[（(，,。；;\s])(?:{pickup_prefix})(?=({term_group}))", "拾取", corrected)
+    corrected = re.sub(rf"^(?:吹想|吹向|吹像|吹项|吹响起)(?=({term_group}))", "吹响", corrected)
+    corrected = re.sub(rf"^(?:适用|试用|实用)(?=({term_group}))", "使用", corrected)
+    return corrected
+
+
+def _known_item_aliases(item_id):
+    aliases = set(_VOICE_KNOWN_ITEM_ALIASES.get(item_id, set()))
+    aliases.add(item_id)
+    aliases.add(item_id.replace("_", " "))
+    for lang in ("en", "zh"):
+        aliases.add(get_item_name(item_id, lang=lang))
+    return {str(alias).strip().lower() for alias in aliases if str(alias).strip()}
+
+
+def _known_world_aliases(world_id):
+    aliases = set(_VOICE_KNOWN_WORLD_ALIASES.get(world_id, set()))
+    aliases.add(world_id)
+    aliases.add(world_id.replace("_", " "))
+    for lang in ("en", "zh"):
+        aliases.add(get_world_name(world_id, lang=lang))
+        aliases.update(get_move_world_keywords(lang).get(world_id, []))
+    return {str(alias).strip().lower() for alias in aliases if str(alias).strip()}
+
+
+def _text_contains_alias(text, aliases):
+    probe = str(text or "").lower()
+    compact_probe = re.sub(r"[\s,，.。·'\"-]+", "", probe)
+    for alias in aliases:
+        if not alias:
+            continue
+        alias_probe = alias.lower()
+        if alias_probe in probe:
+            return True
+        compact_alias = re.sub(r"[\s,，.。·'\"-]+", "", alias_probe)
+        if compact_alias and compact_alias in compact_probe:
+            return True
+    return False
+
+
+def _apply_voice_term_corrections(text, lang, game_state):
+    if not text:
+        return ""
+    world_id = _voice_current_world(game_state)
+    if lang == "zh" or _contains_cjk(text):
+        corrected = _voice_to_simplified_zh(text)
+        for wrong, right in sorted(_VOICE_ZH_TERM_REPLACEMENTS, key=lambda pair: len(pair[0]), reverse=True):
+            if right in corrected and wrong in right:
+                continue
+            corrected = corrected.replace(wrong, right)
+        for wrong, right in _VOICE_WORLD_ZH_CONTEXT_TERMS.get(world_id, ()):
+            if right in corrected:
+                continue
+            corrected = corrected.replace(wrong, right)
+        return _repair_zh_action_homophones(corrected)
+
+    corrected = str(text)
+    for wrong, right in sorted(_VOICE_EN_TERM_REPLACEMENTS, key=lambda pair: len(pair[0]), reverse=True):
+        corrected = _replace_case_insensitive_phrase(corrected, wrong, right)
+    for wrong, right in _VOICE_WORLD_EN_CONTEXT_TERMS.get(world_id, ()):
+        if right.lower() in corrected.lower():
+            continue
+        corrected = _replace_case_insensitive_phrase(corrected, wrong, right)
+    return corrected
+
+
+def _normalize_game_command(command, game_state=None):
+    lang = _current_lang()
+    normalized = _normalize_voice_text(command)
+    normalized = _apply_voice_term_corrections(normalized, lang, game_state)
+    if _contains_cjk(normalized):
+        normalized = _voice_to_simplified_zh(normalized)
+    return normalized.strip()
+
+
+def _voice_mentions_known_term(text, lang):
+    probe = _apply_voice_term_corrections(text, lang, None)
+    if lang == "zh" or _contains_cjk(probe):
+        probe = _voice_to_simplified_zh(probe)
+    known_aliases = set()
+    for item_id in _VOICE_KNOWN_ITEM_ALIASES:
+        known_aliases.update(_known_item_aliases(item_id))
+    for world_id in _VOICE_KNOWN_WORLD_ALIASES:
+        known_aliases.update(_known_world_aliases(world_id))
+    return _text_contains_alias(probe, known_aliases)
+
+
+def _voice_is_dialogue_question(text, lang):
+    stripped = _voice_strip_action_wrappers(text)
+    if not stripped:
+        return False
+    if lang == "zh" or _contains_cjk(stripped):
+        simplified = _voice_to_simplified_zh(stripped)
+        if simplified.startswith(("问", "问问", "问一下", "询问", "告诉", "告诉我", "请问", "和", "跟", "对", "向")):
+            return True
+        question_patterns = (
+            r"(?:我|我们|咱们)?(?:需要|该|应该|要).{0,14}(?:做些什么|做什么|怎么办|怎么做|如何|什么)",
+            r"(?:我|我们|咱们).{0,10}(?:怎么|如何|哪里|在哪|为什么|什么|谁)",
+            r"(?:能|可以|可否|请).{0,8}(?:告诉|说|讲|指引|帮我|帮助我)",
+            r"(?:做些什么|做什么|怎么办|怎么做|如何找到|怎么找到|怎样找到)",
+        )
+        if any(re.search(pattern, simplified) for pattern in question_patterns):
+            return True
+        if "？" in simplified or "?" in simplified:
+            return any(marker in simplified for marker in ("哪里", "在哪", "怎么", "为什么", "什么", "谁", "可以", "能"))
+        return simplified.startswith(("哪里", "在哪", "怎么", "为什么", "什么", "谁", "能不能", "可以"))
+    return bool(_VOICE_EN_DIALOGUE_RE.search(stripped) or "?" in stripped)
+
+
+def _voice_is_action_intent(text, lang):
+    stripped = _voice_strip_action_wrappers(text)
+    if not stripped:
+        return False
+    if lang == "zh" or _contains_cjk(stripped):
+        simplified = _voice_to_simplified_zh(stripped)
+        if _voice_is_dialogue_question(simplified, "zh") and not simplified.startswith(_VOICE_ZH_ACTION_MARKERS):
+            return False
+        return any(marker in simplified for marker in _VOICE_ZH_ACTION_MARKERS)
+
+    if _voice_is_dialogue_question(stripped, "en") and not _VOICE_EN_ACTION_RE.search(stripped):
+        return False
+    return bool(_VOICE_EN_ACTION_RE.search(stripped))
+
+
+def _voice_reconcile_with_raw(corrected, raw_transcript, lang, game_state):
+    if not raw_transcript:
+        return corrected
+    raw = _apply_voice_term_corrections(_voice_strip_action_wrappers(raw_transcript), lang, game_state)
+    current = _apply_voice_term_corrections(_voice_strip_action_wrappers(corrected), lang, game_state)
+    if not (_voice_is_action_intent(raw, lang) and _voice_mentions_known_term(raw, lang)):
+        return current
+    if not _voice_mentions_known_term(current, lang):
+        return raw
+    if lang == "zh" or _contains_cjk(raw):
+        raw_wants_search = any(marker in raw for marker in ("寻找", "找", "搜索", "搜寻"))
+        current_uses_select = current.startswith(("选择", "选"))
+        if raw_wants_search and current_uses_select:
+            return raw
+    else:
+        raw_wants_search = re.search(r"\b(find|search(?:\s+for)?|look\s+for)\b", raw, re.IGNORECASE)
+        current_uses_select = re.search(r"\b(choose|select)\b", current, re.IGNORECASE)
+        if raw_wants_search and current_uses_select:
+            return raw
+    return current
+
+
+def _voice_finalize_text(text, lang, game_state, raw_transcript=None):
+    finalized = _clean_voice_correction(text)
+    if not finalized:
+        return ""
+    finalized = _voice_reconcile_with_raw(finalized, raw_transcript, lang, game_state)
+    finalized = _apply_voice_term_corrections(finalized, lang, game_state)
+    if lang == "zh" or _contains_cjk(finalized):
+        finalized = _voice_to_simplified_zh(finalized)
+    inner = _voice_strip_action_wrappers(finalized)[:300].strip()
+    if _voice_is_action_intent(inner, lang):
+        return f"（{inner}）" if lang == "zh" or _contains_cjk(inner) else f"({inner})"
+    return inner
+
+
+_VOICE_UNUSABLE_PHRASES = (
+    "谢谢观看", "感谢观看", "字幕", "字幕组", "请不吝点赞", "请订阅", "未完待续",
+    "听不清", "无法识别", "没有声音", "背景音乐",
+    "thanks for watching", "thank you for watching", "subscribe", "subtitles",
+    "caption", "captions", "background music", "[music]", "(music)", "applause",
+)
+
+
+def _voice_has_repeated_noise_pattern(text):
+    compact = re.sub(r"[\s,，.。!！?？、；;:：'\"“”‘’()\[\]（）【】…-]+", "", str(text or "").lower())
+    if len(compact) < 16:
+        return False
+    if re.search(r"(小伙伴们|伙伴们|朋友们){3,}", compact):
+        return True
+    for size in range(2, 8):
+        match = re.search(rf"([a-z0-9\u3400-\u9fff]{{{size}}})\1{{3,}}", compact)
+        if match and len(match.group(0)) >= max(16, int(len(compact) * 0.35)):
+            return True
+    words = re.findall(r"[a-zA-Z]+", str(text or "").lower())
+    if len(words) >= 8:
+        counts = {}
+        for word in words:
+            counts[word] = counts.get(word, 0) + 1
+        if max(counts.values()) / len(words) >= 0.55:
+            return True
+    return False
+
+
+def _voice_text_is_unusable(raw_text, final_text, lang, game_state, transcription=None):
+    candidate = _voice_strip_action_wrappers(final_text or raw_text)
+    candidate = _normalize_voice_text(candidate)
+    raw_probe = _normalize_voice_text(raw_text)
+    if not candidate:
+        return True
+    probe = f"{raw_probe} {candidate}".lower()
+    if any(phrase in probe for phrase in _VOICE_UNUSABLE_PHRASES):
+        return True
+    if not re.search(r"[A-Za-z0-9\u3400-\u9fff]", candidate):
+        return True
+    if _voice_has_repeated_noise_pattern(raw_probe) or _voice_has_repeated_noise_pattern(candidate):
+        return True
+
+    normalized = _apply_voice_term_corrections(candidate, lang, game_state)
+    normalized = _voice_to_simplified_zh(normalized) if _contains_cjk(normalized) else normalized
+    if _voice_is_action_intent(normalized, lang) or _voice_is_dialogue_question(normalized, lang) or _voice_mentions_known_term(normalized, lang):
+        return False
+
+    if _contains_cjk(normalized):
+        meaningful = re.sub(r"[嗯啊额呃哦喔噢唔哈嘿呀哎诶\s,，.。!！?？…]+", "", normalized)
+        if len(meaningful) <= 1:
+            return True
+    else:
+        words = re.findall(r"[a-zA-Z]+", normalized)
+        filler_words = {"um", "uh", "ah", "oh", "hmm", "mmm", "yeah", "noise"}
+        if not words or all(word.lower() in filler_words for word in words):
+            return True
+
+    activity = transcription.get("activity") if isinstance(transcription, dict) else None
+    if isinstance(activity, dict) and activity.get("voiced_seconds", 1.0) < 0.22:
+        return True
+
+    return False
+
+
+def _voice_context(game_state):
+    world = get_world(game_state.current_world) if game_state else None
+    npc_names = []
+    for npc in (world or {}).get("npcs", []) or []:
+        if isinstance(npc, str):
+            npc_data = get_npc(npc)
+            npc_names.append(npc_data.get("name", npc) if npc_data else npc)
+        elif isinstance(npc, dict) and npc.get("name"):
+            npc_names.append(npc["name"])
+    world_name = get_world_name(game_state.current_world) if game_state else "museum"
+    return {
+        "world_id": game_state.current_world if game_state else "museum",
+        "world_name": world_name,
+        "npc_present": bool(npc_names),
+        "npc_names": npc_names,
+    }
+
+
+def _build_voice_correction_messages(transcript, strength, lang, game_state):
+    context = _voice_context(game_state)
+    if lang == "zh":
+        strength_rules = {
+            "low": "只修正明显错字、断句和标点；不要扩写。",
+            "balanced": "修正明显识别错误，并把清楚的游戏行动整理成简短指令。",
+            "high": "在不改变意图的前提下，尽量把语音整理成最适合游戏输入框的简洁指令。",
+        }
+        system = (
+            "你是文字冒险游戏的语音转写修正器。只输出最终要放进输入框的一行文本，"
+            "不要解释，不要加引号，不要使用 Markdown。必须使用简体中文。"
+        )
+        convention = (
+            "输入规则：如果玩家明显是在做行动或移动，例如四处看看、进入画作、拿起物品、使用物品，"
+            "请用中文全角括号包住整句，例如（四处看看）。如果玩家是在对 NPC 说话或提问，不要加括号。"
+            "例如“我需要做什么”“我该怎么找到”“哪里有”“能告诉我吗”都属于提问，不要加括号。"
+            "必须保留并修正游戏术语：海螺笛、安宁石、魔法灯笼、黄色颜料、雾透镜、日出颜料。"
+            "画作、人物、界面术语也必须修正为：星月夜、神奈川冲浪里、印象·日出、梵高、北斋、莫奈、NPC、颜色。"
+            "中文语音常有平翘舌、前后鼻音和相近韵母误差：新越义/心悦夜/兴越夜/星乐夜都应优先按上下文修正为星月夜，"
+            "深奈川/神内川应优先修正为神奈川，凡高/烦高/范高应修正为梵高。"
+            "不要输出繁体字。寻找、搜索、选择、拿起、使用、吹奏、返回、进入、走进、前往都属于行动。"
+        )
+        user = (
+            f"当前世界：{context['world_name']} ({context['world_id']})\n"
+            f"当前是否有 NPC：{'是' if context['npc_present'] else '否'}"
+            f"{'；NPC：' + '、'.join(context['npc_names']) if context['npc_names'] else ''}\n"
+            f"修正力度：{strength_rules.get(strength, strength_rules[_VOICE_CORRECTION_DEFAULT])}\n"
+            f"{convention}\n"
+            f"语音转写：{transcript}"
+        )
+    else:
+        strength_rules = {
+            "low": "Fix only obvious recognition errors, casing, punctuation, and spacing. Do not expand.",
+            "balanced": "Fix clear recognition errors and shape obvious game actions into concise commands.",
+            "high": "Without changing intent, make the transcript as suitable as possible for the command box.",
+        }
+        system = (
+            "You correct speech-to-text transcripts for a text-adventure command box. "
+            "Return exactly one final input line only. Do not explain, quote, or use Markdown."
+        )
+        convention = (
+            "Input convention: if the player is clearly taking an action or moving, such as look around, "
+            "enter a painting, take an item, or use an item, wrap the whole command in parentheses, "
+            "for example (look around). If the player is speaking to or asking an NPC, do not use parentheses. "
+            "Questions like what should I do, how can I find it, where is it, or can you tell me are dialogue, not actions. "
+            "Preserve and correct known game terms: shell flute, calming stone, enchanted lantern, "
+            "yellow pigment, mist lens, sunrise pigment, Starry Night, The Great Wave, Impression, Sunrise, "
+            "Van Gogh, Hokusai, Monet, NPC, and color. Find, search for, choose, select, take, use, play, "
+            "return, go to, and enter are action intents."
+        )
+        user = (
+            f"Current world: {context['world_name']} ({context['world_id']})\n"
+            f"NPC present: {'yes' if context['npc_present'] else 'no'}"
+            f"{'; NPCs: ' + ', '.join(context['npc_names']) if context['npc_names'] else ''}\n"
+            f"Correction strength: {strength_rules.get(strength, strength_rules[_VOICE_CORRECTION_DEFAULT])}\n"
+            f"{convention}\n"
+            f"Speech transcript: {transcript}"
+        )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def _build_voice_online_correction_messages(transcript, strength, lang, game_state):
+    context = _voice_context(game_state)
+    if lang == "zh":
+        system = (
+            "你是《被诅咒的画布》的在线语音转写总修正器。你必须只输出最终要进入输入框的一行文本，"
+            "不得解释、不得加引号、不得输出 Markdown、不得输出繁体字。你要主动修正常见语音识别错误，"
+            "但不能编造玩家没有表达的目标。"
+        )
+        rules = (
+            "严格判定意图：玩家在移动、寻找、拾取、使用、查看、返回、进入、前往时，输出必须用中文全角括号包住；"
+            "玩家在询问、聊天、表达不知道该做什么、问 NPC 或画家时，绝对不要加括号。"
+            "“我需要做什么”“我该怎么办”“哪里有”“请告诉我”“问一下”都是对话/提问。"
+            "必须强力修正这些游戏词：NPC、葛饰北斋、北斋、莫奈、梵高、星月夜、神奈川冲浪里、印象·日出、"
+            "海螺笛、安宁石、魔法灯笼、黄色颜料、雾透镜、日出颜料、沙滩、岸边、礁石、颜色。"
+            "常见错听：各式北战/葛式北斋/隔饰北斋->葛饰北斋；沙灿/沙谭/沙摊/沙坛->沙滩；"
+            "新越义/心悦夜/兴越夜/星乐夜->星月夜；深奈川/神内川->神奈川；凡高/烦高/范高->梵高；"
+            "前期/提取/时期海螺笛->拾取海螺笛；演算/原色->颜色；控制纯之考案->葛饰北斋。"
+            "如果转写几乎不可理解，只保留能确定的意图与术语，不能确定时输出最接近的简短提问。"
+        )
+        user = (
+            f"当前世界：{context['world_name']} ({context['world_id']})\n"
+            f"当前 NPC：{('、'.join(context['npc_names']) if context['npc_names'] else '无')}\n"
+            f"界面语言：简体中文\n"
+            f"玩家选择的修正强度：{strength}\n"
+            f"{rules}\n"
+            f"原始语音转写：{transcript}"
+        )
+    else:
+        system = (
+            "You are the online speech transcript corrector for The Cursed Canvas. "
+            "Return exactly one final command-box line only. Do not explain, quote, or use Markdown. "
+            "Aggressively fix speech-recognition errors, but never invent an objective the player did not express."
+        )
+        rules = (
+            "Intent rule: wrap clear actions in parentheses, including moving, searching, taking, using, looking, "
+            "returning, entering, or heading somewhere. Do not use parentheses for dialogue or questions to an NPC. "
+            "Questions such as what should I do, where is it, can you tell me, or ask Hokusai are dialogue. "
+            "Correct these game terms strongly: NPC, Hokusai, Katsushika Hokusai, Monet, Van Gogh, Starry Night, "
+            "The Great Wave, Impression, Sunrise, shell flute, calming stone, enchanted lantern, yellow pigment, "
+            "mist lens, sunrise pigment, beach, shore, reef, and color. "
+            "Common mishearings: who kusai/hoku sigh -> Hokusai; beech/sand bank -> beach; show flute -> shell flute."
+        )
+        user = (
+            f"Current world: {context['world_name']} ({context['world_id']})\n"
+            f"Current NPCs: {(', '.join(context['npc_names']) if context['npc_names'] else 'none')}\n"
+            f"UI language: English\n"
+            f"Selected correction strength: {strength}\n"
+            f"{rules}\n"
+            f"Raw speech transcript: {transcript}"
+        )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def _voice_llm_client_for_current_mode():
+    mode = session.get("llm_mode", _active_mode)
+    api_is_broken = mode == "api" and _api_broken_until > time.time()
+    if mode == "api" and not api_is_broken:
+        if _experience_api_allowed():
+            return _get_deepseek_client_for_current_settings(), True
+        return None, False
+    if mode == "local" and _llm_ready:
+        return _llm, False
+    return None, False
+
+
+def _voice_online_llm_client_for_correction():
+    mode = session.get("llm_mode", _active_mode)
+    if mode != "api" or _api_broken_until > time.time() or not _experience_api_allowed():
+        return None
+    return _get_deepseek_client_for_current_settings()
+
+
+def _voice_local_llm_client_for_correction():
+    mode = session.get("llm_mode", _active_mode)
+    if mode == "local" and _llm_ready:
+        return _llm
+    return None
+
+
+def _voice_correction_backend(backend):
+    selected = backend or session.get("voice_correction_backend", _VOICE_CORRECTION_BACKEND_DEFAULT)
+    return selected if selected in _VOICE_CORRECTION_BACKENDS else _VOICE_CORRECTION_BACKEND_DEFAULT
+
+
+def _refine_voice_text(transcript, strength, game_state, backend=None):
+    cleaned_transcript = _normalize_voice_text(transcript)[:300]
+    if not cleaned_transcript:
+        return cleaned_transcript, False, "empty"
+    lang = _current_lang()
+    correction_backend = _voice_correction_backend(backend)
+    deterministic_text = _voice_finalize_text(cleaned_transcript, lang, game_state, cleaned_transcript)
+
+    client = None
+    uses_api = False
+    source = "llm"
+    online_prompt = False
+    try:
+        if correction_backend == "online":
+            client = _voice_online_llm_client_for_correction()
+            uses_api = client is not None
+            source = "online"
+            online_prompt = True
+        elif correction_backend == "local":
+            client = _voice_local_llm_client_for_correction()
+            source = "local_llm"
+        else:
+            client, uses_api = _voice_llm_client_for_current_mode()
+            source = "online" if uses_api else "llm"
+            online_prompt = bool(uses_api)
+    except Exception as exc:
+        logger.warning("Voice correction client unavailable: %s", exc)
+        return deterministic_text, deterministic_text != cleaned_transcript, "deterministic" if deterministic_text != cleaned_transcript else "fallback"
+    if client is None:
+        fallback_source = "online_unavailable" if correction_backend == "online" else ("deterministic" if deterministic_text != cleaned_transcript else "fallback")
+        return deterministic_text, deterministic_text != cleaned_transcript, fallback_source
+
+    messages = (
+        _build_voice_online_correction_messages(cleaned_transcript, strength, lang, game_state)
+        if online_prompt
+        else _build_voice_correction_messages(cleaned_transcript, strength, lang, game_state)
+    )
+    try:
+        if uses_api:
+            corrected_text, ok = _run_with_experience_quota(lambda: client.generate_voice_correction(messages))
+        else:
+            corrected_text, ok = client.generate_voice_correction(messages)
+    except _ExperienceQuotaExhausted:
+        logger.info("Experience token quota exhausted during voice correction.")
+        return deterministic_text, deterministic_text != cleaned_transcript, "quota" if deterministic_text == cleaned_transcript else "deterministic"
+    except Exception as exc:
+        logger.warning("Voice correction failed: %s", exc)
+        return deterministic_text, deterministic_text != cleaned_transcript, "deterministic" if deterministic_text != cleaned_transcript else "fallback"
+
+    corrected = _voice_finalize_text(corrected_text, lang, game_state, cleaned_transcript)
+    if not ok or not corrected:
+        return deterministic_text, deterministic_text != cleaned_transcript, "deterministic" if deterministic_text != cleaned_transcript else "fallback"
+    return corrected, corrected != cleaned_transcript, source
+
+
+def _transcribe_voice_audio(audio_bytes, lang):
+    from ai.stt import transcribe_wav_bytes
+
+    global _voice_stt_ready, _voice_stt_loading, _voice_stt_error, _voice_stt_model, _voice_stt_source
+    text, metadata = transcribe_wav_bytes(audio_bytes, lang=lang)
+    with _voice_stt_lock:
+        _voice_stt_ready = True
+        _voice_stt_loading = False
+        _voice_stt_error = None
+        if isinstance(metadata, dict):
+            _voice_stt_model = metadata.get("model") or _voice_stt_model
+            _voice_stt_source = metadata.get("source") or _voice_stt_source
+    return text, metadata
+
+
+def _warmup_voice_model():
+    from ai.stt import warmup_voice_model
+
+    return warmup_voice_model()
+
+
+def _voice_stt_status_payload():
+    payload = {
+        "voice_stt_ready": bool(_voice_stt_ready),
+        "voice_stt_loading": bool(_voice_stt_loading and not _voice_stt_ready),
+        "voice_stt_error": _voice_stt_error,
+        "voice_model": _voice_stt_model,
+        "voice_source": _voice_stt_source,
+    }
+    if _voice_runtime_checked:
+        payload.update({
+            "voice_runtime_checked": True,
+            "voice_runtime_ok": bool(_voice_runtime_ok),
+            "voice_runtime_error": _voice_runtime_error,
+            "voice_runtime_error_type": _voice_runtime_error_type,
+        })
+    return payload
+
+
+def _record_voice_runtime_result(result):
+    global _voice_runtime_checked, _voice_runtime_ok, _voice_runtime_error, _voice_runtime_error_type
+    global _voice_stt_ready, _voice_stt_loading, _voice_stt_error
+    payload = result if isinstance(result, dict) else {}
+    ok = bool(payload.get("voice_runtime_ok", payload.get("ok")))
+    error = payload.get("voice_runtime_error") or payload.get("error")
+    error_type = payload.get("voice_runtime_error_type") or payload.get("error_type")
+    with _voice_stt_lock:
+        _voice_runtime_checked = True
+        _voice_runtime_ok = ok
+        _voice_runtime_error = None if ok else (error or "Voice runtime check failed.")
+        _voice_runtime_error_type = None if ok else error_type
+        if ok:
+            if not _voice_stt_ready:
+                _voice_stt_error = None
+        else:
+            _voice_stt_ready = False
+            _voice_stt_loading = False
+            _voice_stt_error = _voice_runtime_error
+    return ok
+
+
+def _warmup_voice_async():
+    global _voice_stt_ready, _voice_stt_loading, _voice_stt_error, _voice_stt_model, _voice_stt_source, _voice_stt_warmup_started_at
+    with _voice_stt_lock:
+        if _voice_stt_ready or _voice_stt_loading:
+            return
+        _voice_stt_loading = True
+        _voice_stt_error = None
+        _voice_stt_warmup_started_at = time.time()
+
+    try:
+        runtime_result = _check_voice_runtime()
+        if not _record_voice_runtime_result(runtime_result):
+            return
+        with _voice_stt_lock:
+            _voice_stt_loading = True
+            _voice_stt_error = None
+        result = _warmup_voice_model()
+        with _voice_stt_lock:
+            _voice_stt_ready = True
+            _voice_stt_loading = False
+            _voice_stt_error = None
+            if isinstance(result, dict):
+                _voice_stt_model = result.get("model") or result.get("voice_model") or _voice_stt_model
+                _voice_stt_source = result.get("source") or _voice_stt_source
+    except Exception as exc:
+        logger.warning("Voice model warmup failed: %s", exc)
+        with _voice_stt_lock:
+            _voice_stt_ready = False
+            _voice_stt_loading = False
+            _voice_stt_error = str(exc) or "Voice model warmup failed"
+    finally:
+        with _voice_stt_lock:
+            _voice_stt_warmup_started_at = 0
+
+
+def _start_voice_warmup_background():
+    with _voice_stt_lock:
+        if _voice_stt_ready or _voice_stt_loading:
+            return False
+        if _voice_runtime_checked and _voice_runtime_ok is False:
+            return False
+    threading.Thread(target=_warmup_voice_async, daemon=True).start()
+    return True
+
+
+def _check_voice_runtime():
+    from ai.stt import check_voice_runtime
+
+    return check_voice_runtime()
+
+
+def _voice_runtime_payload():
+    try:
+        result = _check_voice_runtime()
+        payload = result if isinstance(result, dict) else {}
+        _record_voice_runtime_result(payload)
+    except Exception as exc:
+        logger.warning("Voice runtime check failed: %s", exc)
+        payload = {
+            "ok": False,
+            "voice_runtime_checked": True,
+            "voice_runtime_ok": False,
+            "voice_runtime_error": str(exc) or "Voice runtime check failed.",
+            "voice_runtime_error_type": exc.__class__.__name__,
+        }
+        _record_voice_runtime_result(payload)
+    payload.update(_voice_stt_status_payload())
+    return payload
+
+
+def _append_voice_experience_payload(payload):
+    if session.get("deepseek_api_mode", "experience") == "experience":
+        proxy_status = _experience_proxy_status()
+        if proxy_status:
+            payload["experience_remaining_percent"] = proxy_status.get("remaining_percent", _experience_token_percent())
+            payload["experience_remaining_tokens"] = proxy_status.get("remaining_tokens", _experience_tokens_remaining())
+        else:
+            payload["experience_remaining_percent"] = _experience_token_percent()
+            payload["experience_remaining_tokens"] = _experience_tokens_remaining()
+    return payload
+
+
+def _voice_error_code(message):
+    if message in {"Empty voice audio", "Empty voice transcript", "No speech was captured"}:
+        return "voice_empty"
+    return "voice_transcribe"
+
+
 def _model_status_payload(extra=None):
     api_broken = _api_broken_until > time.time()
     payload = {
@@ -497,6 +1512,7 @@ def _model_status_payload(extra=None):
 def _settings_payload():
     key, source = _personal_deepseek_key()
     payload = _model_status_payload()
+    payload.update(_voice_runtime_payload())
     proxy_status, proxy_error = _experience_proxy_probe()
     experience_available = _experience_mode_available(proxy_status)
     forced_personal = False
@@ -520,6 +1536,7 @@ def _settings_payload():
             "available": get_supported_languages(),
             "switching_available": True,
         },
+        "voice": _voice_settings_payload(),
         "deepseek": {
             "api_mode": session.get("deepseek_api_mode", "experience"),
             "personal_configured": bool(key),
@@ -724,6 +1741,90 @@ def _save_record_from_state(gs):
 # Keyword-based intent classification (Tier 2 fallback)
 # ------------------------------------------------------------------ #
 
+def _known_item_ids_for_state(game_state):
+    if not game_state:
+        return []
+    item_ids = set(getattr(game_state, "inventory", []) or [])
+    world = get_world(game_state.current_world)
+    if world:
+        item_ids.update(world.get("items_available", []) or [])
+        item_ids.update((world.get("items_hidden", {}) or {}).keys())
+    return list(item_ids)
+
+
+def _command_mentions_known_item(command, game_state):
+    if not game_state:
+        return False
+    probes = {
+        _normalize_game_command(command, game_state).lower(),
+        _apply_voice_term_corrections(command, "zh", game_state).lower(),
+        _apply_voice_term_corrections(command, "en", game_state).lower(),
+    }
+    for item_id in _known_item_ids_for_state(game_state):
+        aliases = _known_item_aliases(item_id)
+        if any(_text_contains_alias(probe, aliases) for probe in probes):
+            return True
+    return False
+
+
+def _known_item_search_intent(command, game_state):
+    if not _command_mentions_known_item(command, game_state):
+        return None
+    cmd = _normalize_game_command(command, game_state).lower()
+    if _contains_cjk(cmd):
+        if any(marker in cmd for marker in (
+            "寻找", "找", "找找", "搜索", "搜寻", "选择", "选", "查看", "检查", "观察",
+            "拿起", "捡起", "拾取", "取走", "拿走", "拿", "使用", "用", "吹奏", "吹响",
+        )):
+            return "use_item"
+    if re.search(
+        r"\b(find|search(?:\s+for)?|look\s+for|choose|select|take|pick\s+up|pick|grab|collect|get|"
+        r"use|apply|play|blow|inspect|examine|check|look\s+at)\b",
+        cmd,
+        re.IGNORECASE,
+    ):
+        return "use_item"
+    return None
+
+
+def _command_mentions_exit_world(command, game_state):
+    if not game_state:
+        return False
+    world = get_world(game_state.current_world)
+    if not world:
+        return False
+    probes = {
+        _normalize_game_command(command, game_state).lower(),
+        _apply_voice_term_corrections(command, "zh", game_state).lower(),
+        _apply_voice_term_corrections(command, "en", game_state).lower(),
+    }
+    for ex in world.get("exits", []) or []:
+        aliases = _known_world_aliases(ex["target"])
+        if any(_text_contains_alias(probe, aliases) for probe in probes):
+            return True
+    return False
+
+
+def _known_world_move_intent(command, game_state):
+    if not _command_mentions_exit_world(command, game_state):
+        return None
+    cmd = _normalize_game_command(command, game_state).lower()
+    if _contains_cjk(cmd):
+        if any(marker in cmd for marker in (
+            "进入", "前往", "去", "进去", "进到", "走进", "走向", "走到", "步入",
+            "跨进", "跨入", "穿过", "穿入", "选择", "选", "回到", "返回", "离开", "退出",
+        )):
+            return "move"
+    if re.search(
+        r"\b(go(?:\s+to)?|move\s+to|enter|step\s+into|walk\s+into|go\s+into|head\s+to|"
+        r"travel\s+to|visit|choose|select|return(?:\s+to)?|go\s+back|leave|exit)\b",
+        cmd,
+        re.IGNORECASE,
+    ):
+        return "move"
+    return None
+
+
 def _classify_keyword_fallback(command, game_state=None):
     """Pure keyword-based intent detection. No ML, no LLM.
     Returns an intent string or None if no keyword matches.
@@ -732,7 +1833,8 @@ def _classify_keyword_fallback(command, game_state=None):
     """
     lang = _current_lang()
     rules = get_keywords(lang)
-    cmd = command.lower()
+    normalized_command = _normalize_game_command(command, game_state)
+    cmd = normalized_command.lower()
     words = cmd.split()
     npc_present = False
     if game_state:
@@ -750,8 +1852,16 @@ def _classify_keyword_fallback(command, game_state=None):
     if cmd in help_phrases or any(cmd.startswith(p + " ") or cmd.startswith(p + "？") for p in help_phrases):
         return "help"
 
+    known_world_intent = _known_world_move_intent(normalized_command, game_state)
+    if known_world_intent:
+        return known_world_intent
+
     if any(v in cmd for v in rules["move_verbs"]):
         return "move"
+
+    known_item_intent = _known_item_search_intent(normalized_command, game_state)
+    if known_item_intent:
+        return known_item_intent
 
     if any(v in cmd for v in rules["item_verbs"]):
         return "use_item"
@@ -835,23 +1945,33 @@ def _extract_move_target_from_command(command, world, require_move_verb=False):
         return None
     lang = _current_lang()
     move_kw = get_move_world_keywords(lang)
-    cmd_lower = command.lower()
+    cmd_lower = _normalize_game_command(command, None).lower()
     if require_move_verb:
-        rules = get_keywords(lang)
-        if not any(v in cmd_lower for v in rules["move_verbs"]):
+        move_markers = set(get_keywords("en")["move_verbs"]) | set(get_keywords("zh")["move_verbs"]) | {
+            "go", "enter", "visit", "return", "leave", "exit", "choose", "select",
+            "去", "进去", "进到", "走进", "跨进", "跨入", "穿过", "穿入", "选择", "选",
+        }
+        if not any(v in cmd_lower for v in move_markers):
             return None
     for ex in (world.get("exits") or []):
         target = ex["target"]
-        keywords = move_kw.get(target, [])
+        keywords = set(move_kw.get(target, []))
+        keywords.update(get_move_world_keywords("en").get(target, []))
+        keywords.update(get_move_world_keywords("zh").get(target, []))
+        keywords.update(_known_world_aliases(target))
         if any(kw in cmd_lower for kw in keywords):
             return target
         target_world = get_world(target)
         if not target_world:
             continue
-        target_name = target_world["name"].lower()
+        target_names = {
+            target_world["name"].lower(),
+            get_world_name(target, lang="en").lower(),
+            get_world_name(target, lang="zh").lower(),
+        }
         target_id = target.lower()
         target_spaced = target_id.replace("_", " ")
-        if target_name in cmd_lower or target_id in cmd_lower or target_spaced in cmd_lower:
+        if any(name and name in cmd_lower for name in target_names) or target_id in cmd_lower or target_spaced in cmd_lower:
             return target
         target_artist = target_world.get("artist", "").lower()
         if target_artist and target_artist in cmd_lower:
@@ -938,11 +2058,13 @@ def handle_command():
     mode = session.get("llm_mode", _active_mode)
 
     command, input_mode = _parse_player_input(raw_command)
+    command = _normalize_game_command(command, gs)
     if not command:
         return jsonify({"error": "Empty command"}), 400
 
-    # Preserve original input for transcript (with parentheses for actions)
-    display_command = f"({command})" if (input_mode == "action" and raw_command != command) else raw_command
+    # Keep downstream gameplay matching on the normalized command. The client has
+    # already shown the user's exact submitted text in the chat log.
+    display_command = f"({command})" if input_mode == "action" else command
 
     world = get_world(gs.current_world)
     npc_present = bool(world and world.get("npcs"))
@@ -1201,6 +2323,131 @@ def local_runtime_check():
     return jsonify({**result, **_model_status_payload()})
 
 
+@app.route("/api/voice/warmup", methods=["GET", "POST"])
+def warmup_voice_input():
+    started = _start_voice_warmup_background()
+    status_payload = _voice_stt_status_payload()
+    status_error = status_payload.get("voice_stt_error")
+    if status_error or status_payload.get("voice_runtime_ok") is False:
+        payload = _model_status_payload({
+            **status_payload,
+            "voice_runtime_checked": True,
+            "voice_runtime_ok": False,
+            "voice_runtime_error": status_payload.get("voice_runtime_error") or status_error,
+            "error": status_payload.get("voice_runtime_error") or status_error,
+            "voice": _voice_settings_payload(),
+        })
+        return jsonify(payload), 503
+    warmup_payload = {
+        **status_payload,
+        "voice_warmup_started": started,
+        "voice": _voice_settings_payload(),
+    }
+    if "voice_runtime_checked" not in warmup_payload:
+        warmup_payload["voice_runtime_checked"] = False
+    payload = _model_status_payload(warmup_payload)
+    return jsonify(payload)
+
+
+@app.route("/api/voice/runtime-check", methods=["GET"])
+def voice_runtime_check():
+    payload = _model_status_payload({
+        **_voice_runtime_payload(),
+        "voice": _voice_settings_payload(),
+    })
+    return jsonify(payload)
+
+
+@app.route("/api/voice/refine", methods=["POST"])
+def refine_voice_input():
+    data = request.get_json(force=True)
+    transcript = _normalize_voice_text(data.get("text", ""))[:300]
+    if not transcript:
+        return jsonify({"error": "Empty voice transcript"}), 400
+
+    strength = data.get("correction_strength") or session.get("voice_correction_strength", _VOICE_CORRECTION_DEFAULT)
+    if strength not in _VOICE_CORRECTION_LEVELS:
+        return jsonify({"error": f"Invalid voice correction strength: {strength}"}), 400
+    backend = data.get("correction_backend") or session.get("voice_correction_backend", _VOICE_CORRECTION_BACKEND_DEFAULT)
+    if backend not in _VOICE_CORRECTION_BACKENDS:
+        return jsonify({"error": f"Invalid voice correction backend: {backend}"}), 400
+
+    session.pop("game_state", None)  # Legacy cookie payload cleanup
+    game_state = _load_session_game_state() or GameState()
+    corrected, changed, source = _refine_voice_text(transcript, strength, game_state, backend)
+    payload = _model_status_payload({
+        "text": corrected,
+        "raw_text": transcript,
+        "corrected": bool(changed),
+        "source": source,
+        "voice": _voice_settings_payload(),
+    })
+    return jsonify(_append_voice_experience_payload(payload))
+
+
+@app.route("/api/voice/transcribe", methods=["POST"])
+def transcribe_voice_input():
+    audio_file = request.files.get("audio")
+    if audio_file is None:
+        return jsonify({"error": "Missing voice audio", "code": "voice_transcribe"}), 400
+
+    audio_bytes = audio_file.read(_VOICE_AUDIO_MAX_BYTES + 1)
+    if not audio_bytes:
+        return jsonify({"error": "Empty voice audio", "code": "voice_empty"}), 400
+    if len(audio_bytes) > _VOICE_AUDIO_MAX_BYTES:
+        return jsonify({"error": "Voice audio is too large", "code": "voice_transcribe"}), 413
+
+    strength = request.form.get("correction_strength") or session.get("voice_correction_strength", _VOICE_CORRECTION_DEFAULT)
+    if strength not in _VOICE_CORRECTION_LEVELS:
+        return jsonify({"error": f"Invalid voice correction strength: {strength}"}), 400
+    backend = request.form.get("correction_backend") or session.get("voice_correction_backend", _VOICE_CORRECTION_BACKEND_DEFAULT)
+    if backend not in _VOICE_CORRECTION_BACKENDS:
+        return jsonify({"error": f"Invalid voice correction backend: {backend}"}), 400
+
+    lang = request.form.get("language") or getattr(g, "lang", "en")
+    try:
+        transcript_text, transcription = _transcribe_voice_audio(audio_bytes, lang)
+    except ValueError as exc:
+        message = str(exc)
+        return jsonify({"error": message, "code": _voice_error_code(message)}), 400
+    except Exception as exc:
+        logger.warning("Voice transcription failed: %s", exc)
+        payload = _model_status_payload({
+            **_voice_stt_status_payload(),
+            "error": "Voice transcription is unavailable",
+            "voice": _voice_settings_payload(),
+        })
+        return jsonify(payload), 503
+
+    transcript = _normalize_voice_text(transcript_text)[:300]
+    if not transcript:
+        return jsonify({"error": "Empty voice transcript", "code": "voice_empty"}), 400
+
+    session.pop("game_state", None)  # Legacy cookie payload cleanup
+    game_state = _load_session_game_state() or GameState()
+    corrected, changed, source = _refine_voice_text(transcript, strength, game_state, backend)
+    if _voice_text_is_unusable(transcript, corrected, _current_lang(), game_state, transcription):
+        payload = _model_status_payload({
+            **_voice_stt_status_payload(),
+            "error": "Voice transcript is unusable",
+            "code": "voice_unusable",
+            "raw_text": transcript,
+            "voice": _voice_settings_payload(),
+        })
+        return jsonify(payload), 422
+    payload = _model_status_payload({
+        **_voice_stt_status_payload(),
+        "text": corrected,
+        "raw_text": transcript,
+        "corrected": bool(changed),
+        "source": source,
+        "transcription": transcription,
+        "transcription_source": transcription.get("source", "local-whisper") if isinstance(transcription, dict) else "local-whisper",
+        "voice": _voice_settings_payload(),
+    })
+    return jsonify(_append_voice_experience_payload(payload))
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def settings():
     if request.method == "GET":
@@ -1211,6 +2458,7 @@ def settings():
     api_mode = data.get("api_mode")
     personal_api_key = data.get("personal_api_key")
     unlock_key = data.get("unlock_key")
+    voice_data = data.get("voice")
 
     if language is not None:
         if language not in get_supported_languages():
@@ -1259,6 +2507,10 @@ def settings():
                 return jsonify({"error": "Unlock key was not accepted."}), 400
         session["experience_unlocked"] = True
         session["deepseek_api_mode"] = "experience"
+
+    voice_error = _apply_voice_settings(voice_data)
+    if voice_error:
+        return jsonify({"error": voice_error, **_settings_payload()}), 400
 
     _reset_deepseek_client_for_settings(session.get("deepseek_api_mode", "experience"))
     return jsonify(_settings_payload())
@@ -1453,6 +2705,7 @@ def set_language():
 def status():
     gs = _load_session_game_state()
     return jsonify(_model_status_payload({
+        **_voice_stt_status_payload(),
         "game_state_exists": gs is not None and gs.game_complete
     }))
 

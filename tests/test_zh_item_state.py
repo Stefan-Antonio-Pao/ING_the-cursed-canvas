@@ -27,6 +27,13 @@ class ChineseItemStateTests(unittest.TestCase):
         self.assertEqual(_classify_keyword_fallback("拿走灯笼", game_state=gs), "use_item")
         self.assertEqual(_classify_keyword_fallback("取下那盏灯", game_state=gs), "use_item")
 
+    def test_chinese_take_starlight_keyword_maps_to_yellow_pigment(self):
+        gs = self._starry_state()
+        gs.inventory.append("lantern")
+        gs.items_found.add("lantern")
+        gs.revealed_items.add("yellow_pigment")
+        self.assertEqual(_classify_keyword_fallback("拾取星光", game_state=gs), "use_item")
+
     def test_scripted_use_item_takes_lantern_with_short_chinese_alias(self):
         gs = self._starry_state()
         response = gs.process("use_item", "（拿走灯笼）")
@@ -72,6 +79,24 @@ class ChineseItemStateTests(unittest.TestCase):
             "mood": "neutral",
             "move_target": None,
             "player_command": "（拿走颜料）",
+        })
+        self.assertIn("yellow_pigment", gs.inventory)
+        self.assertIn("失窃的黄色颜料", response["inventory"])
+
+    def test_revealed_yellow_pigment_can_be_taken_as_starlight(self):
+        gs = self._starry_state()
+        gs.inventory.append("lantern")
+        gs.items_found.add("lantern")
+        gs.revealed_items.add("yellow_pigment")
+
+        response = gs.process_dm_response({
+            "intent": "explore",
+            "scene": "你伸出手，接住那一抹从阴影里漏出的明亮星光。",
+            "npc_reply": "很好，把它带回来。",
+            "npc_name": "文森特·梵高",
+            "mood": "neutral",
+            "move_target": None,
+            "player_command": "（拾取‘星光’）",
         })
         self.assertIn("yellow_pigment", gs.inventory)
         self.assertIn("失窃的黄色颜料", response["inventory"])

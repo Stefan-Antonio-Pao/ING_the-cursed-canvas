@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, session } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
@@ -151,6 +151,30 @@ function probeLocalRuntime(url, timeoutMs = 20000) {
   });
 }
 
+function isLocalAppUrl(value) {
+  try {
+    const parsed = new URL(value || "");
+    return parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function configureMediaPermissions() {
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details = {}) => {
+    if (permission === "media" && isLocalAppUrl(details.requestingUrl)) {
+      appendLog(`Granted media permission for ${details.requestingUrl || "local app"}`);
+      callback(true);
+      return;
+    }
+    callback(false);
+  });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details = {}) => {
+    if (permission !== "media") return false;
+    return isLocalAppUrl(requestingOrigin) || isLocalAppUrl(details.requestingUrl);
+  });
+}
+
 function findFreePort(startPort = 7860) {
   return new Promise((resolve, reject) => {
     let port = startPort;
@@ -278,7 +302,10 @@ async function boot() {
   }
 }
 
-app.whenReady().then(boot);
+app.whenReady().then(() => {
+  configureMediaPermissions();
+  return boot();
+});
 
 app.on("window-all-closed", () => {
   if (backendProcess) backendProcess.kill();

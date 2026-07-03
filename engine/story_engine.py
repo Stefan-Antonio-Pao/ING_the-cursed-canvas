@@ -84,6 +84,9 @@ class GameState:
         if key == "hold_item":
             item = kwargs.get("item") or {}
             return f"你握着{item.get('name', '那个物品')}——{item.get('description', '')}" if zh else f"You hold the {item.get('name', 'item').lower()} -- {item.get('description', '')}"
+        if key == "need_pickup_first":
+            item = kwargs.get("item") or {}
+            return f"你还没有拿起{item.get('name', '那个物品')}。" if zh else f"You have not picked up the {item.get('name', 'item').lower()} yet."
         if key == "generic_help":
             return "探索博物馆，并步入一幅画作来开始你的任务。" if zh else "Explore the museum and step into a painting to begin your quest."
         if key == "no_path":
@@ -240,8 +243,10 @@ class GameState:
         if not used_item_id: return get_default("item_not_recognized"), None, None
         item = get_item(used_item_id)
         if used_item_id not in self.inventory and used_item_id not in self.items_found:
-            self.inventory.append(used_item_id); self.items_found.add(used_item_id)
-            return item.get("pickup_msg", self._localized_fallback("pick_up", item=item)), None, None
+            if self._looks_like_item_take_attempt(cmd_lower):
+                self.inventory.append(used_item_id); self.items_found.add(used_item_id)
+                return item.get("pickup_msg", self._localized_fallback("pick_up", item=item)), None, None
+            return self._localized_fallback("need_pickup_first", item=item), None, None
         scene = self._localized_fallback("hold_item", item=item)
         for hid_id, hidden in world.get("items_hidden", {}).items():
             if hidden.get("reveal_item") == used_item_id and hid_id not in self.items_found:
@@ -299,13 +304,23 @@ class GameState:
         cmd_words = cmd_lower.split()
         # Strong keyword aliases that map directly to worlds (checked first)
         strong = {"museum":"museum","gallery":"museum",
+                  "博物馆":"museum","魔法博物馆":"museum","画廊":"museum","展厅":"museum",
                   "starry":"starry_night","night":"starry_night","stars":"starry_night",
                   "swirling":"starry_night","van gogh":"starry_night",
+                  "星月夜":"starry_night","新月夜":"starry_night","星夜":"starry_night",
+                  "星空":"starry_night","梵高":"starry_night","凡高":"starry_night",
                   "wave":"great_wave","kanagawa":"great_wave",
                   "hokusai":"great_wave","sea":"great_wave","ocean":"great_wave",
+                  "神奈川":"great_wave","神奈川冲浪":"great_wave","神奈川冲浪里":"great_wave",
+                  "冲浪":"great_wave","海浪":"great_wave","巨浪":"great_wave",
+                  "北斋":"great_wave","大海":"great_wave","海洋":"great_wave",
                   "impression":"impression_sunrise","sunrise":"impression_sunrise",
                   "monet":"impression_sunrise","harbor":"impression_sunrise",
-                  "havre":"impression_sunrise","misty":"impression_sunrise"}
+                  "havre":"impression_sunrise","misty":"impression_sunrise",
+                  "印象":"impression_sunrise","印象日出":"impression_sunrise",
+                  "印象·日出":"impression_sunrise","日出":"impression_sunrise",
+                  "莫奈":"impression_sunrise","莫内":"impression_sunrise",
+                  "港口":"impression_sunrise","勒阿弗尔":"impression_sunrise","雾":"impression_sunrise"}
         for ex in world.get("exits", []):
             target = ex["target"]
             target_spaced = target.replace("_", " ")
@@ -321,7 +336,7 @@ class GameState:
             for kw, wid in strong.items():
                 if kw in cmd_lower and target == wid:
                     kw_words = kw.split()
-                    if len(kw_words) == 1 and len(cmd_words) < 2:
+                    if len(kw_words) == 1 and cmd_lower.strip() == kw:
                         continue  # guard: don't match bare "wave" or "night"
                     return self._move_to_world(target)
             # Match on significant name words (both in command)
@@ -440,20 +455,10 @@ class GameState:
                         scene = (scene or "") + self._localized_fallback("no_paths")
 
         elif intent == "use_item":
-            scene_lower = (scene or "").lower()
-            npc_lower = (npc_reply or "").lower()
-            search_texts = [scene_lower, npc_lower, player_cmd_lower]
-
-            def _item_mentioned(item_id, item):
-                return any(
-                    self._mentions_item(item_id, item, t)
-                    for t in search_texts
-                )
-
             for item_id in world.get("items_available", []):
                 item = get_item(item_id)
                 if item and item_id not in self.items_found:
-                    if _item_mentioned(item_id, item):
+                    if self._looks_like_item_take_attempt(player_cmd_lower) and self._mentions_item(item_id, item, player_cmd_lower):
                         self.inventory.append(item_id)
                         self.items_found.add(item_id)
                         break
@@ -581,8 +586,7 @@ class GameState:
             if not item or item_id in self.items_found:
                 continue
             mentioned_in_cmd = self._mentions_item(item_id, item, player_cmd_lower)
-            pickup_in_narration = self._narration_signals_pickup(narrative) and self._mentions_item(item_id, item, narrative)
-            should_award = pickup_in_narration or (is_take_attempt and mentioned_in_cmd) or (intent == "use_item" and mentioned_in_cmd)
+            should_award = is_take_attempt and mentioned_in_cmd
             if should_award:
                 self.inventory.append(item_id)
                 self.items_found.add(item_id)
@@ -753,7 +757,9 @@ class GameState:
             },
             "yellow_pigment": {
                 "yellow", "pigment", "yellow pigment", "yellow paint", "paint tube",
-                "黄色颜料", "黄颜料", "颜料", "黄色", "黄颜色", "黄色油彩", "颜料管"
+                "starlight", "stolen starlight", "yellow starlight",
+                "黄色颜料", "黄颜料", "颜料", "黄色", "黄颜色", "黄色油彩", "颜料管",
+                "星光", "失窃星光", "被偷走的星光", "黄色星光"
             },
             "shell_flute": {
                 "flute", "shell flute", "sea flute",
@@ -786,6 +792,9 @@ class GameState:
                 "grab",
                 "collect",
                 "obtain",
+                "find",
+                "search",
+                "look for",
                 "拿",
                 "拿起",
                 "拿走",
@@ -800,6 +809,10 @@ class GameState:
                 "拾取",
                 "收集",
                 "获得",
+                "寻找",
+                "找",
+                "搜索",
+                "搜寻",
                 "抓住",
                 "握住",
                 "提起",
