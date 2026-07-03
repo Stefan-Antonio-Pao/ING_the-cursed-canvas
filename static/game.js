@@ -47,6 +47,8 @@ const PRELOAD_FALLBACK_TEXT = {
         interface: "Localizing the interface...",
         saves: "Preparing save slots...",
         state: "Checking adventure state...",
+        local_model: "Checking optional local model environment...",
+        voice_model: "Preparing voice input...",
         scene: "Preparing the midnight museum...",
         effects: "Warming up visual effects...",
         ready: "Entering the museum..."
@@ -57,6 +59,8 @@ const PRELOAD_FALLBACK_TEXT = {
         interface: "正在本地化界面……",
         saves: "正在准备存档槽位……",
         state: "正在检查冒险状态……",
+        local_model: "正在检查可选本地模型环境……",
+        voice_model: "正在准备语音输入……",
         scene: "正在准备午夜博物馆……",
         effects: "正在预热视觉效果……",
         ready: "即将进入博物馆……"
@@ -86,6 +90,11 @@ function finishPreloadOverlay() {
     setPreloadStage("ready", 100);
     window.setTimeout(() => {
         document.body.classList.add("preload-complete");
+        if (!titleScreenDismissed) {
+            restartTitleScreenEntranceAnimation();
+            startTitleParticles({ restart: true });
+        }
+        scheduleVoiceWarmupAfterFirstPaint(titleScreenDismissed ? 900 : 1900);
         if (loadingOverlay) {
             loadingOverlay.classList.add("hidden");
             window.setTimeout(() => {
@@ -101,13 +110,68 @@ function finishPreloadOverlay() {
     }, 260);
 }
 
+async function probeOptionalLocalRuntimeForPreload(timeoutMs = 2000) {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timeoutId = null;
+    const timeoutPromise = new Promise((resolve) => {
+        timeoutId = window.setTimeout(() => {
+            if (controller) controller.abort();
+            resolve(null);
+        }, timeoutMs);
+    });
+    const requestPromise = fetch("/api/local-runtime/check", {
+        cache: "no-store",
+        signal: controller ? controller.signal : undefined
+    })
+        .then((resp) => resp.ok ? resp.json() : null)
+        .then((data) => {
+            if (data) {
+                updateModelStatus(data);
+                updateLocalModelSettingsStatus(data);
+            }
+            return data;
+        })
+        .catch(() => null);
+    const result = await Promise.race([requestPromise, timeoutPromise]);
+    if (timeoutId) window.clearTimeout(timeoutId);
+    return result;
+}
+
+async function warmupVoiceModelForPreload(timeoutMs = 1500) {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timeoutId = null;
+    const timeoutPromise = new Promise((resolve) => {
+        timeoutId = window.setTimeout(() => {
+            if (controller) controller.abort();
+            resolve(null);
+        }, timeoutMs);
+    });
+    const requestPromise = fetch("/api/voice/warmup", {
+        method: "POST",
+        cache: "no-store",
+        signal: controller ? controller.signal : undefined
+    })
+        .then(async (resp) => {
+            const data = await resp.json().catch(() => null);
+            if (data) updateVoiceRuntimeSettingsStatus(data);
+            return resp.ok ? data : null;
+        })
+        .catch(() => null);
+    const result = await Promise.race([requestPromise, timeoutPromise]);
+    if (timeoutId) window.clearTimeout(timeoutId);
+    return result;
+}
+
 async function switchLanguage(lang) {
     if (languageSwitchBusy) return;
+    if (isNewAdventureTransitionBusy()) {
+        setSettingsStatus(t("settings.language_transition_locked"), "success");
+        return;
+    }
     const currentLang = window.I18N && window.I18N.lang ? window.I18N.lang : null;
     if (lang && currentLang === lang) return;
     languageSwitchBusy = true;
-    if (languagePrevBtn) languagePrevBtn.disabled = true;
-    if (languageNextBtn) languageNextBtn.disabled = true;
+    updateNewAdventureTransitionControls();
     try {
         const resp = await fetch("/api/language", {
             method: "POST",
@@ -127,27 +191,46 @@ async function switchLanguage(lang) {
         console.error("Language switch error:", err);
     } finally {
         languageSwitchBusy = false;
-        if (languagePrevBtn) languagePrevBtn.disabled = false;
-        if (languageNextBtn) languageNextBtn.disabled = false;
+        updateNewAdventureTransitionControls();
     }
 }
 
+function getCurrentInterfaceLanguage() {
+    if (window.I18N && window.I18N.lang) return window.I18N.lang;
+    const storedLang = localStorage.getItem("cursed_canvas_lang");
+    if (storedLang) return storedLang;
+    if (settingsData && settingsData.language && settingsData.language.current) return settingsData.language.current;
+    return "en";
+}
+
 function refreshAllUI(sidePanelData) {
+    if (typeof applyI18N === "function") applyI18N();
     if (locationBadge) locationBadge.textContent = t("game.location_badge_default");
     if (commandInput) commandInput.placeholder = t("game.input_placeholder");
     if (sendBtn) sendBtn.textContent = t("game.send");
+    if (voiceStatus && (!voiceStatus.classList.contains("error") || voiceStatus.classList.contains("hint"))) {
+        resetVoiceStatus();
+    }
+    updateVoiceButtonState();
+    updateVoiceSettingsUi();
     if (panelToggle) panelToggle.textContent = sidePanel && sidePanel.classList.contains("collapsed") ? t("game.panel_toggle_collapsed") : t("game.panel_toggle");
     if (gameSettingsBtn) gameSettingsBtn.textContent = t("side_panel.settings");
     setLanguageDisplay();
     updateTutorialSettingsUi();
+    updateCursorSettingsUi();
     renderTutorialSurfaces();
     updateQuickActions(currentWorld);
     updateSidePanel(sidePanelData || null);
-    if (typeof applyI18N === "function") applyI18N();
-    // Re-render gallery if open
-    if (galleryPages.length > 0) {
-        galleryPageIndex = Math.max(0, Math.min(galleryPageIndex, galleryPages.length - 1));
-        renderGalleryPage({ animate: false });
+    if (lastModelStatusData) updateModelStatus(lastModelStatusData);
+    scheduleSettingsPanelHeightSync();
+    // Gallery payload is language-specific, so cached pages must be discarded on language refresh.
+    if (galleryPages.length > 0 || isGalleryOpen()) {
+        galleryPages = [];
+        galleryLanguage = null;
+        galleryPageIndex = 0;
+        if (isGalleryOpen()) {
+            void loadGalleryPages();
+        }
     }
 }
 
@@ -155,6 +238,8 @@ function refreshAllUI(sidePanelData) {
 const chatLog = document.getElementById("chat-log");
 const commandForm = document.getElementById("command-form");
 const commandInput = document.getElementById("command-input");
+const voiceBtn = document.getElementById("voice-btn");
+const voiceStatus = document.getElementById("voice-status");
 const sendBtn = document.getElementById("send-btn");
 const locationBadge = document.getElementById("location-badge");
 const responseBadge = document.getElementById("response-badge");
@@ -170,7 +255,9 @@ const npcCard = document.getElementById("npc-card");
 const npcPortraitLarge = document.getElementById("npc-portrait-large");
 const npcNameDisplay = document.getElementById("npc-name-display");
 const npcRoleDisplay = document.getElementById("npc-role-display");
-const modelStatusText = document.getElementById("model-status-text");
+const apiModelStatusText = document.getElementById("api-model-status-text");
+const localChatModelStatusText = document.getElementById("local-chat-model-status-text");
+const localVoiceModelStatusText = document.getElementById("local-voice-model-status-text");
 const loadingOverlay = document.getElementById("loading-overlay");
 const titleScreen = document.getElementById("title-screen");
 const titleParticleCanvas = document.getElementById("title-particles-canvas");
@@ -194,6 +281,9 @@ const galleryNextBtn = document.getElementById("gallery-next-btn");
 const galleryIndicator = document.getElementById("gallery-indicator");
 const settingsView = document.getElementById("settings-view");
 const settingsBackBtn = document.getElementById("settings-back-btn");
+const settingsCard = settingsView ? settingsView.querySelector(".settings-card") : null;
+const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
+const settingsTabPanels = Array.from(document.querySelectorAll("[data-settings-tab-panel]"));
 const settingsFlowPrevBtn = document.getElementById("settings-flow-prev-btn");
 const settingsFlowNextBtn = document.getElementById("settings-flow-next-btn");
 const settingsStatus = document.getElementById("settings-status");
@@ -205,6 +295,37 @@ const tutorialPreferenceNote = document.getElementById("tutorial-preference-note
 const modelPrevBtn = document.getElementById("model-prev-btn");
 const modelNextBtn = document.getElementById("model-next-btn");
 const modelProviderValue = document.getElementById("model-provider-value");
+const voiceBackendPrevBtn = document.getElementById("voice-backend-prev-btn");
+const voiceBackendNextBtn = document.getElementById("voice-backend-next-btn");
+const voiceBackendValue = document.getElementById("voice-backend-value");
+const voiceBackendNote = document.getElementById("voice-backend-note");
+const voiceRuntimePanel = document.getElementById("voice-runtime-panel");
+const voiceCorrectionPrevBtn = document.getElementById("voice-correction-prev-btn");
+const voiceCorrectionNextBtn = document.getElementById("voice-correction-next-btn");
+const voiceCorrectionValue = document.getElementById("voice-correction-value");
+const voiceAutoSendCheckbox = document.getElementById("voice-auto-send-checkbox");
+const voicePreferenceNote = document.getElementById("voice-preference-note");
+const voiceRuntimeDot = document.getElementById("voice-runtime-dot");
+const voiceRuntimeStatus = document.getElementById("voice-runtime-status");
+const voiceRuntimeDetail = document.getElementById("voice-runtime-detail");
+const cursorStyleCheckbox = document.getElementById("cursor-style-checkbox");
+const cursorTrailCheckbox = document.getElementById("cursor-trail-checkbox");
+const cursorTipGlowCheckbox = document.getElementById("cursor-tip-glow-checkbox");
+const cursorClickEffectCheckbox = document.getElementById("cursor-click-effect-checkbox");
+const cursorStyleNote = document.getElementById("cursor-style-note");
+const cursorTrailNote = document.getElementById("cursor-trail-note");
+const cursorTipGlowNote = document.getElementById("cursor-tip-glow-note");
+const cursorClickEffectNote = document.getElementById("cursor-click-effect-note");
+const cursorPreviewPanel = document.querySelector(".cursor-preview-panel");
+const cursorTipGlowRadiusControl = document.getElementById("cursor-tip-glow-radius-control");
+const cursorTipGlowRadiusPrevBtn = document.getElementById("cursor-tip-glow-radius-prev-btn");
+const cursorTipGlowRadiusNextBtn = document.getElementById("cursor-tip-glow-radius-next-btn");
+const cursorTipGlowRadiusValue = document.getElementById("cursor-tip-glow-radius-value");
+const cursorTipGlowRadiusNote = document.getElementById("cursor-tip-glow-radius-note");
+const cursorTrailStyleControl = document.getElementById("cursor-trail-style-control");
+const cursorTrailStylePrevBtn = document.getElementById("cursor-trail-style-prev-btn");
+const cursorTrailStyleNextBtn = document.getElementById("cursor-trail-style-next-btn");
+const cursorTrailStyleValue = document.getElementById("cursor-trail-style-value");
 const deepseekSettingsPanel = document.getElementById("deepseek-settings-panel");
 const localModelSettingsPanel = document.getElementById("local-model-settings-panel");
 const experienceTokenPercent = document.getElementById("experience-token-percent");
@@ -266,14 +387,41 @@ let startScreenDismissed = false;
 let galleryPages = [];
 let galleryPageIndex = 0;
 let galleryIsLoading = false;
+let galleryLanguage = null;
 let settingsData = null;
 let settingsBusy = false;
+let voiceSettingsBusy = false;
+let pendingVoiceSettingsPatch = null;
+let voiceSettingsDraft = null;
+let settingsHeightSyncFrame = null;
 let languageSwitchBusy = false;
+let voiceListening = false;
+let voiceBusy = false;
+let voiceBaseInput = "";
+let voiceInputEnabled = true;
+let voiceMediaStream = null;
+let voiceAudioContext = null;
+let voiceSourceNode = null;
+let voiceProcessorNode = null;
+let voicePcmChunks = [];
+let voiceRecordingSampleRate = 16000;
+let voiceRecordingTimer = null;
+let voiceFinishing = false;
+let voiceRecordingSequence = 0;
+let voiceCurrentRecordingId = 0;
+let voiceActiveRequestId = 0;
+let voiceStatusResetTimer = null;
+let voiceWarmupScheduled = false;
+let voiceWarmupTimer = null;
 let settingsReturnTarget = "menu";
+let settingsActiveTab = "display";
+let lastModelStatusData = null;
+let localModelReadyNoticeShown = false;
 let gameInputWasEnabledBeforeSettings = false;
 let newAdventureFlowActive = false;
 let newAdventurePrepared = false;
 let newAdventurePreparing = false;
+let newAdventureTransitionLocked = false;
 let tutorialDialogReturnFocus = null;
 let galleryTransitionDirection = "next";
 let galleryTransitionTimer = null;
@@ -288,6 +436,20 @@ let recentlyChangedSlotIndex = null;
 let inventoryTimeline = [];
 let inventoryDetails = [];
 let dynamicWorldOrder = [];
+let cursorTrailLayer = null;
+let cursorTrailEnabled = false;
+let cursorTrailListenerAttached = false;
+let cursorTrailPalette = [];
+let cursorTrailDots = [];
+let cursorTrailLastX = 0;
+let cursorTrailLastY = 0;
+let cursorTrailLastTime = 0;
+let cursorTrailLastDeltaX = 0;
+let cursorTrailLastDeltaY = 0;
+let cursorTrailPointHistory = [];
+let cursorClickFeedbackEnabled = false;
+let cursorClickListenerAttached = false;
+let cursorClickElements = [];
 const worldTransition = document.getElementById("world-transition");
 let startParticles = [];
 let startParticleFrameId = null;
@@ -350,8 +512,52 @@ const SETTINGS_MODEL_OPTIONS = [
     { mode: "api", labelKey: "model_status.api_label" },
     { mode: "local", labelKey: "model_status.local_label" },
 ];
+const VOICE_CORRECTION_OPTIONS = [
+    { value: "low", labelKey: "settings.voice_correction_low" },
+    { value: "balanced", labelKey: "settings.voice_correction_balanced" },
+    { value: "high", labelKey: "settings.voice_correction_high" },
+];
+const VOICE_BACKEND_OPTIONS = [
+    { value: "auto", labelKey: "settings.voice_backend_auto", noteKey: "settings.voice_backend_auto_note" },
+    { value: "local", labelKey: "settings.voice_backend_local", noteKey: "settings.voice_backend_local_note" },
+    { value: "online", labelKey: "settings.voice_backend_online", noteKey: "settings.voice_backend_online_note" },
+];
+const DEFAULT_VOICE_SETTINGS = {
+    correction_strength: "balanced",
+    correction_backend: "auto",
+    auto_send: false,
+};
+const VOICE_MAX_RECORDING_MS = 12000;
+const VOICE_MIN_RECORDING_SECONDS = 0.25;
+const VOICE_ANALYSIS_FRAME_SECONDS = 0.05;
+const VOICE_SILENCE_PADDING_SECONDS = 0.12;
+const VOICE_MIN_RMS = 0.0035;
+const VOICE_MIN_PEAK = 0.018;
+const VOICE_FRAME_RMS = 0.006;
+const VOICE_FRAME_PEAK = 0.025;
+const VOICE_MIN_VOICED_SECONDS = 0.15;
+const VOICE_MIN_DYNAMIC_RATIO = 1.7;
+const VOICE_MIN_PEAK_RMS_RATIO = 2.6;
+const VOICE_MAX_FLAT_VOICED_RATIO = 0.92;
 const TUTORIAL_ENABLED_STORAGE_KEY = "theCursedCanvas.tutorialEnabled.v1";
 const TUTORIAL_SEEN_STORAGE_KEY = "theCursedCanvas.tutorialSeen.v1";
+const CURSOR_STYLE_STORAGE_KEY = "theCursedCanvas.cursorStyleEnabled.v1";
+const CURSOR_TRAIL_STORAGE_KEY = "theCursedCanvas.cursorTrailEnabled.v1";
+const CURSOR_TIP_GLOW_STORAGE_KEY = "theCursedCanvas.cursorTipGlowEnabled.v1";
+const CURSOR_TIP_GLOW_RADIUS_STORAGE_KEY = "theCursedCanvas.cursorTipGlowRadius.v1";
+const CURSOR_CLICK_EFFECT_STORAGE_KEY = "theCursedCanvas.cursorClickEffectEnabled.v1";
+const CURSOR_TRAIL_STYLE_STORAGE_KEY = "theCursedCanvas.cursorTrailStyle.v1";
+const CURSOR_TRAIL_MAX_DOTS = 36;
+const CURSOR_CLICK_MAX_ELEMENTS = 30;
+const CURSOR_TIP_GLOW_RADIUS_OPTIONS = [
+    { value: "small", labelKey: "settings.cursor_tip_glow_radius_small", noteKey: "settings.cursor_tip_glow_radius_small_note", radius: 4.6, blur: 1.7, opacity: 0.34 },
+    { value: "medium", labelKey: "settings.cursor_tip_glow_radius_medium", noteKey: "settings.cursor_tip_glow_radius_medium_note", radius: 6.7, blur: 2.25, opacity: 0.4 },
+    { value: "large", labelKey: "settings.cursor_tip_glow_radius_large", noteKey: "settings.cursor_tip_glow_radius_large_note", radius: 9.1, blur: 2.95, opacity: 0.46 },
+];
+const CURSOR_TRAIL_STYLE_OPTIONS = [
+    { value: "laser", labelKey: "settings.cursor_trail_style_laser", noteKey: "settings.cursor_trail_laser_note" },
+    { value: "stardust", labelKey: "settings.cursor_trail_style_stardust", noteKey: "settings.cursor_trail_stardust_note" },
+];
 
 // ── Title screen flow ──
 
@@ -444,8 +650,12 @@ function drawTitleParticles() {
     titleParticleFrameId = requestAnimationFrame(drawTitleParticles);
 }
 
-function startTitleParticles() {
-    if (!titleParticleCanvas || !titleParticleCtx || titleParticleFrameId) return;
+function startTitleParticles(options = {}) {
+    if (!titleParticleCanvas || !titleParticleCtx) return;
+    if (options.restart && titleParticleFrameId) {
+        stopTitleParticles();
+    }
+    if (titleParticleFrameId) return;
     resizeTitleParticleCanvas();
     resetTitleParticles();
     drawTitleParticles();
@@ -459,6 +669,42 @@ function stopTitleParticles() {
     if (titleParticleCtx) {
         titleParticleCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
     }
+}
+
+function restartTitleScreenEntranceAnimation() {
+    if (!titleScreen || titleScreen.classList.contains("hidden")) return;
+    const animated = [
+        titleScreen.querySelector(".title-screen-content"),
+        titleScreen.querySelector(".title-kicker"),
+        titleScreen.querySelector(".title-main"),
+        titleScreen.querySelector(".title-continue"),
+    ].filter(Boolean);
+    if (titleParticleCanvas) titleParticleCanvas.classList.remove("fading");
+    titleScreen.classList.remove("dismissing");
+    if (titleContinue) titleContinue.classList.remove("hiding");
+    animated.forEach((el) => {
+        el.style.animation = "none";
+    });
+    void titleScreen.offsetHeight;
+    animated.forEach((el) => {
+        el.style.animation = "";
+    });
+}
+
+function scheduleVoiceWarmupAfterFirstPaint(delayMs = 1600) {
+    if (voiceWarmupScheduled) return;
+    voiceWarmupScheduled = true;
+    if (voiceWarmupTimer) window.clearTimeout(voiceWarmupTimer);
+    voiceWarmupTimer = window.setTimeout(() => {
+        const runWarmup = () => {
+            warmupVoiceModelForPreload().catch(() => {});
+        };
+        if (typeof window.requestIdleCallback === "function") {
+            window.requestIdleCallback(runWarmup, { timeout: 2500 });
+        } else {
+            window.setTimeout(runWarmup, 300);
+        }
+    }, Math.max(0, delayMs));
 }
 
 function dismissTitleScreen() {
@@ -560,6 +806,8 @@ function dismissTitleScreen() {
 function setGameInputEnabled(enabled) {
     commandInput.disabled = !enabled;
     sendBtn.disabled = !enabled;
+    voiceInputEnabled = Boolean(enabled);
+    updateVoiceButtonState();
 }
 
 function resizeStartParticleCanvas() {
@@ -614,6 +862,7 @@ function setStartParticleTheme(worldId) {
     startParticlePaletteFrom = getCurrentStartParticlePalette();
     startParticlePaletteTo = targetPalette;
     startParticlePaletteStartedAt = performance.now();
+    applyCursorTheme(worldId);
 }
 
 function resetStartParticles() {
@@ -706,6 +955,155 @@ function showStartView(view) {
     introStory.classList.toggle("active", view === "intro");
 }
 
+function resetSettingsScrollPosition() {
+    if (settingsCard) settingsCard.scrollTop = 0;
+    if (settingsView) settingsView.scrollTop = 0;
+    settingsTabPanels.forEach((panel) => {
+        panel.scrollTop = 0;
+    });
+    document.querySelectorAll(".settings-model-panel").forEach((panel) => {
+        panel.scrollTop = 0;
+    });
+}
+
+function measureSettingsCardHeightForPanel(panel, options = {}) {
+    if (!settingsCard || !panel) return 0;
+    const previousStates = settingsTabPanels.map((item) => ({
+        item,
+        hidden: item.hidden,
+        active: item.classList.contains("active"),
+    }));
+    settingsTabPanels.forEach((item) => {
+        const isTarget = item === panel;
+        item.hidden = !isTarget;
+        item.classList.toggle("active", isTarget);
+    });
+    const mutableElements = [
+        deepseekSettingsPanel,
+        localModelSettingsPanel,
+        personalApiFields,
+        voiceRuntimePanel,
+    ].filter(Boolean);
+    const previousMutableStates = mutableElements.map((item) => ({
+        item,
+        hidden: item.classList.contains("hidden"),
+    }));
+    if (panel && panel.dataset.settingsTabPanel === "ai") {
+        if (options.aiVariant === "api") {
+            if (deepseekSettingsPanel) deepseekSettingsPanel.classList.remove("hidden");
+            if (localModelSettingsPanel) localModelSettingsPanel.classList.add("hidden");
+            if (personalApiFields) personalApiFields.classList.remove("hidden");
+        } else if (options.aiVariant === "local") {
+            if (deepseekSettingsPanel) deepseekSettingsPanel.classList.add("hidden");
+            if (localModelSettingsPanel) localModelSettingsPanel.classList.remove("hidden");
+        }
+    } else if (panel && panel.dataset.settingsTabPanel === "voice") {
+        if (voiceRuntimePanel) voiceRuntimePanel.classList.remove("hidden");
+    }
+    const hiddenDependentElements = [];
+    if (panel && panel.dataset.settingsTabPanel === "cursor") {
+        hiddenDependentElements.push(cursorTipGlowRadiusControl, cursorTrailStyleControl);
+    }
+    const previousHiddenDependentStates = hiddenDependentElements.filter(Boolean).map((item) => ({
+        item,
+        hidden: item.hidden,
+    }));
+    previousHiddenDependentStates.forEach(({ item }) => {
+        item.hidden = false;
+    });
+    const cardStyle = window.getComputedStyle(settingsCard);
+    const borderY = parseFloat(cardStyle.borderTopWidth || "0") + parseFloat(cardStyle.borderBottomWidth || "0");
+    const measuredHeight = settingsCard.scrollHeight + borderY;
+    previousHiddenDependentStates.forEach(({ item, hidden }) => {
+        item.hidden = hidden;
+    });
+    previousMutableStates.forEach(({ item, hidden }) => {
+        item.classList.toggle("hidden", hidden);
+    });
+    previousStates.forEach(({ item, hidden, active }) => {
+        item.hidden = hidden;
+        item.classList.toggle("active", active);
+    });
+    return measuredHeight;
+}
+
+function syncSettingsPanelHeights() {
+    settingsHeightSyncFrame = null;
+    if (!settingsView || !settingsCard || !settingsTabPanels.length) return;
+    if (!settingsView.classList.contains("active")) return;
+    if (window.matchMedia && window.matchMedia("(max-width: 480px)").matches) {
+        settingsCard.style.setProperty("--settings-card-synced-height", "auto");
+        settingsCard.classList.remove("settings-card-scroll-limited");
+        return;
+    }
+
+    const previousHeight = settingsCard.style.getPropertyValue("--settings-card-synced-height");
+    const previousVisibility = settingsCard.style.visibility;
+    settingsCard.style.setProperty("--settings-card-synced-height", "auto");
+    settingsCard.classList.remove("settings-card-scroll-limited");
+    settingsCard.style.visibility = "hidden";
+
+    let maxHeight = 0;
+    settingsTabPanels.forEach((panel) => {
+        if (panel.dataset.settingsTabPanel === "ai") {
+            maxHeight = Math.max(
+                maxHeight,
+                measureSettingsCardHeightForPanel(panel, { aiVariant: "api" }),
+                measureSettingsCardHeightForPanel(panel, { aiVariant: "local" })
+            );
+            return;
+        }
+        maxHeight = Math.max(maxHeight, measureSettingsCardHeightForPanel(panel));
+    });
+
+    settingsCard.style.visibility = previousVisibility;
+    if (!maxHeight) {
+        if (previousHeight) settingsCard.style.setProperty("--settings-card-synced-height", previousHeight);
+        return;
+    }
+
+    const computedCardStyle = window.getComputedStyle(settingsCard);
+    const maxAllowed = parseFloat(computedCardStyle.maxHeight || "");
+    const hasBoundary = Number.isFinite(maxAllowed) && maxAllowed > 0;
+    const exceedsBoundary = hasBoundary && maxHeight > maxAllowed + 1;
+    const targetHeight = exceedsBoundary ? maxAllowed : maxHeight;
+    settingsCard.style.setProperty("--settings-card-synced-height", `${Math.ceil(targetHeight)}px`);
+    settingsCard.classList.toggle("settings-card-scroll-limited", exceedsBoundary);
+}
+
+function scheduleSettingsPanelHeightSync() {
+    if (!settingsView || !settingsCard) return;
+    if (settingsHeightSyncFrame) window.cancelAnimationFrame(settingsHeightSyncFrame);
+    settingsHeightSyncFrame = window.requestAnimationFrame(syncSettingsPanelHeights);
+}
+
+function setSettingsTab(tab, options = {}) {
+    const selected = settingsTabPanels.some((panel) => panel.dataset.settingsTabPanel === tab) ? tab : "display";
+    settingsActiveTab = selected;
+    settingsTabButtons.forEach((button) => {
+        const active = button.dataset.settingsTab === selected;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
+    });
+    settingsTabPanels.forEach((panel) => {
+        const active = panel.dataset.settingsTabPanel === selected;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+    });
+    if (options.resetScroll !== false) {
+        window.requestAnimationFrame(resetSettingsScrollPosition);
+    }
+    scheduleSettingsPanelHeightSync();
+}
+
+function resetSettingsViewForOpen() {
+    setSettingsTab("display");
+    resetSettingsScrollPosition();
+    window.requestAnimationFrame(resetSettingsScrollPosition);
+    scheduleSettingsPanelHeightSync();
+}
+
 function showStartStatus(message) {
     if (!startStatus) return;
     startStatus.textContent = message;
@@ -739,6 +1137,23 @@ function readStoredBoolean(key) {
 function writeStoredBoolean(key, value) {
     try {
         localStorage.setItem(key, value ? "1" : "0");
+    } catch (err) {
+        console.warn("Stored preference could not be written:", err);
+    }
+}
+
+function readStoredString(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch (err) {
+        console.warn("Stored preference could not be read:", err);
+    }
+    return null;
+}
+
+function writeStoredString(key, value) {
+    try {
+        localStorage.setItem(key, value);
     } catch (err) {
         console.warn("Stored preference could not be written:", err);
     }
@@ -784,6 +1199,1061 @@ function setTutorialEnabledPreference(enabled) {
 function isTutorialEnabledForNewAdventure() {
     if (tutorialEnabledCheckbox) return Boolean(tutorialEnabledCheckbox.checked);
     return getTutorialEnabledPreference();
+}
+
+function getCursorStylePreference() {
+    const storedPreference = readStoredBoolean(CURSOR_STYLE_STORAGE_KEY);
+    return storedPreference !== false;
+}
+
+function getCursorTrailPreference() {
+    const storedPreference = readStoredBoolean(CURSOR_TRAIL_STORAGE_KEY);
+    return storedPreference !== false;
+}
+
+function getCursorTipGlowPreference() {
+    const storedPreference = readStoredBoolean(CURSOR_TIP_GLOW_STORAGE_KEY);
+    return storedPreference !== false;
+}
+
+function getCursorTipGlowRadiusPreference() {
+    const storedPreference = readStoredString(CURSOR_TIP_GLOW_RADIUS_STORAGE_KEY);
+    return CURSOR_TIP_GLOW_RADIUS_OPTIONS.some((option) => option.value === storedPreference)
+        ? storedPreference
+        : "medium";
+}
+
+function getCursorTipGlowRadiusIndex(radius) {
+    const current = radius || getCursorTipGlowRadiusPreference();
+    const index = CURSOR_TIP_GLOW_RADIUS_OPTIONS.findIndex((option) => option.value === current);
+    return index >= 0 ? index : 1;
+}
+
+function getCursorClickEffectPreference() {
+    const storedPreference = readStoredBoolean(CURSOR_CLICK_EFFECT_STORAGE_KEY);
+    return storedPreference !== false;
+}
+
+function getCursorTrailStylePreference() {
+    const storedPreference = readStoredString(CURSOR_TRAIL_STYLE_STORAGE_KEY);
+    return CURSOR_TRAIL_STYLE_OPTIONS.some((option) => option.value === storedPreference)
+        ? storedPreference
+        : "laser";
+}
+
+function getCursorTrailStyleIndex(style) {
+    const current = style || getCursorTrailStylePreference();
+    const index = CURSOR_TRAIL_STYLE_OPTIONS.findIndex((option) => option.value === current);
+    return index >= 0 ? index : 0;
+}
+
+function getCursorThemePalette(worldId) {
+    const palette = START_PARTICLE_THEME_COLORS[worldId] || START_PARTICLE_THEME_COLORS.museum;
+    return palette.map((color) => color.slice());
+}
+
+function getActiveCursorThemeWorld() {
+    if (startScreen && !startScreen.classList.contains("hidden") && startScreen.dataset.galleryWorld) {
+        return startScreen.dataset.galleryWorld;
+    }
+    return currentWorld || document.body.dataset.world || "museum";
+}
+
+function getCursorTipGlowRadiusOption(radius) {
+    return CURSOR_TIP_GLOW_RADIUS_OPTIONS[getCursorTipGlowRadiusIndex(radius)];
+}
+
+function buildCursorDataUri(primary, secondary, highlight, tipGlowEnabled, tipGlowRadiusOption) {
+    const glowOption = tipGlowRadiusOption || getCursorTipGlowRadiusOption();
+    const glowRadius = glowOption.radius;
+    const glowCoreRadius = Math.max(1.65, glowRadius * 0.33);
+    const tipGlow = tipGlowEnabled ? `
+            <circle cx="6.2" cy="3.4" r="${glowRadius}" fill="rgb(${primary.join(",")})" opacity="${glowOption.opacity}" filter="url(#tipGlow)"/>
+            <circle cx="6.2" cy="3.4" r="${glowCoreRadius}" fill="rgb(${highlight.join(",")})" opacity="0.84"/>
+    ` : "";
+    const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="58" height="58" viewBox="-18 -18 58 58">
+            <defs>
+                <filter id="pointerShadow" x="-40%" y="-40%" width="180%" height="180%">
+                    <feGaussianBlur stdDeviation="1.7"/>
+                </filter>
+                <filter id="tipGlow" x="-80%" y="-80%" width="260%" height="260%">
+                    <feGaussianBlur stdDeviation="${glowOption.blur}"/>
+                </filter>
+                <linearGradient id="edge" x1="7" y1="3" x2="22" y2="28" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="rgb(${highlight.join(",")})"/>
+                    <stop offset="0.58" stop-color="rgb(${primary.join(",")})"/>
+                    <stop offset="1" stop-color="rgb(${secondary.join(",")})"/>
+                </linearGradient>
+            </defs>
+            ${tipGlow}
+            <path d="M6 3 L24 18.5 L16.2 20.2 L20.1 28.4 L16.2 30 L12.2 21.9 L6.9 27.2 Z" fill="rgb(${secondary.join(",")})" opacity="0.46" filter="url(#pointerShadow)"/>
+            <path d="M6 3 L24 18.5 L16.2 20.2 L20.1 28.4 L16.2 30 L12.2 21.9 L6.9 27.2 Z" fill="url(#edge)" stroke="rgb(${highlight.join(",")})" stroke-width="1.15" stroke-linejoin="round"/>
+            <path d="M9.4 8 L18.7 16.1 L14 17.1 L16.7 22.7" fill="none" stroke="rgb(13,13,26)" stroke-opacity="0.58" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    `.trim();
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
+function applyCursorTheme(worldId) {
+    const palette = getCursorThemePalette(worldId || getActiveCursorThemeWorld());
+    const primary = palette[0] || [212, 168, 67];
+    const secondary = palette[1] || [74, 139, 194];
+    const highlight = palette[3] || [245, 240, 224];
+    cursorTrailPalette = palette;
+    document.documentElement.style.setProperty("--cursor-trail-main-rgb", primary.join(", "));
+    document.documentElement.style.setProperty("--cursor-trail-core-rgb", highlight.join(", "));
+    document.documentElement.style.setProperty("--cursor-trail-shadow-rgb", secondary.join(", "));
+    document.documentElement.style.setProperty("--game-cursor", `${buildCursorDataUri(primary, secondary, highlight, getCursorTipGlowPreference(), getCursorTipGlowRadiusOption())} 24 21`);
+}
+
+function ensureCursorTrailLayer() {
+    if (cursorTrailLayer && cursorTrailLayer.parentNode) return cursorTrailLayer;
+    cursorTrailLayer = document.createElement("div");
+    cursorTrailLayer.className = "cursor-trail-layer";
+    cursorTrailLayer.setAttribute("aria-hidden", "true");
+    document.body.appendChild(cursorTrailLayer);
+    return cursorTrailLayer;
+}
+
+function removeCursorTrailDot(dot) {
+    if (!dot) return;
+    cursorTrailDots = cursorTrailDots.filter((item) => item !== dot);
+    if (dot.parentNode) dot.parentNode.removeChild(dot);
+}
+
+function clearCursorTrailDots() {
+    cursorTrailDots.forEach((dot) => {
+        if (dot.parentNode) dot.parentNode.removeChild(dot);
+    });
+    cursorTrailDots = [];
+    cursorTrailLastTime = 0;
+    cursorTrailLastDeltaX = 0;
+    cursorTrailLastDeltaY = 0;
+    cursorTrailPointHistory = [];
+}
+
+function removeCursorClickElement(element) {
+    if (!element) return;
+    cursorClickElements = cursorClickElements.filter((item) => item !== element);
+    if (element.parentNode) element.parentNode.removeChild(element);
+}
+
+function clearCursorClickElements() {
+    cursorClickElements.forEach((element) => {
+        if (element.parentNode) element.parentNode.removeChild(element);
+    });
+    cursorClickElements = [];
+}
+
+function spawnCursorTrailDot(x, y, distance, now) {
+    const layer = ensureCursorTrailLayer();
+    const palette = cursorTrailPalette.length ? cursorTrailPalette : getCursorThemePalette(getActiveCursorThemeWorld());
+    const colorIndex = Math.floor(now / 120) % palette.length;
+    const primary = palette[colorIndex] || palette[0] || [212, 168, 67];
+    const core = palette[(colorIndex + 3) % palette.length] || [245, 240, 224];
+    const shadow = palette[(colorIndex + 1) % palette.length] || [74, 139, 194];
+    const size = Math.max(10, Math.min(22, 10 + distance * 0.16));
+    const dot = document.createElement("span");
+    dot.className = "cursor-trail-dot";
+    dot.style.left = `${x}px`;
+    dot.style.top = `${y}px`;
+    dot.style.width = `${size}px`;
+    dot.style.height = `${size}px`;
+    dot.style.setProperty("--trail-rgb", primary.join(", "));
+    dot.style.setProperty("--trail-core-rgb", core.join(", "));
+    dot.style.setProperty("--trail-shadow-rgb", shadow.join(", "));
+    dot.addEventListener("animationend", () => removeCursorTrailDot(dot), { once: true });
+    layer.appendChild(dot);
+    cursorTrailDots.push(dot);
+    while (cursorTrailDots.length > CURSOR_TRAIL_MAX_DOTS) {
+        removeCursorTrailDot(cursorTrailDots[0]);
+    }
+}
+
+function pushCursorTrailPoint(x, y, now) {
+    const lastPoint = cursorTrailPointHistory[cursorTrailPointHistory.length - 1];
+    if (lastPoint && Math.hypot(x - lastPoint.x, y - lastPoint.y) < 0.5) {
+        lastPoint.t = now;
+        return;
+    }
+    cursorTrailPointHistory.push({ x, y, t: now });
+    while (cursorTrailPointHistory.length > 4) {
+        cursorTrailPointHistory.shift();
+    }
+}
+
+function sampleCatmullRomPoint(p0, p1, p2, p3, progress) {
+    const t2 = progress * progress;
+    const t3 = t2 * progress;
+    return {
+        x: 0.5 * (
+            (2 * p1.x)
+            + (-p0.x + p2.x) * progress
+            + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
+            + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+        ),
+        y: 0.5 * (
+            (2 * p1.y)
+            + (-p0.y + p2.y) * progress
+            + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2
+            + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+        ),
+    };
+}
+
+function getCursorTrailTurnAmount() {
+    if (cursorTrailPointHistory.length < 3) return 0;
+    const p0 = cursorTrailPointHistory[cursorTrailPointHistory.length - 3];
+    const p1 = cursorTrailPointHistory[cursorTrailPointHistory.length - 2];
+    const p2 = cursorTrailPointHistory[cursorTrailPointHistory.length - 1];
+    const ax = p1.x - p0.x;
+    const ay = p1.y - p0.y;
+    const bx = p2.x - p1.x;
+    const by = p2.y - p1.y;
+    const aLength = Math.hypot(ax, ay);
+    const bLength = Math.hypot(bx, by);
+    if (aLength < 0.1 || bLength < 0.1) return 0;
+    const cosine = Math.max(-1, Math.min(1, (ax * bx + ay * by) / (aLength * bLength)));
+    return Math.acos(cosine) / Math.PI;
+}
+
+function buildCursorTrailPathPoints(fromX, fromY, toX, toY, segmentCount) {
+    const fallback = [];
+    for (let i = 0; i <= segmentCount; i++) {
+        const progress = i / segmentCount;
+        fallback.push({
+            x: fromX + (toX - fromX) * progress,
+            y: fromY + (toY - fromY) * progress,
+        });
+    }
+    if (cursorTrailPointHistory.length < 3) return fallback;
+
+    const p0 = cursorTrailPointHistory[cursorTrailPointHistory.length - 3];
+    const p1 = cursorTrailPointHistory[cursorTrailPointHistory.length - 2];
+    const p2 = cursorTrailPointHistory[cursorTrailPointHistory.length - 1];
+    const p3 = {
+        x: p2.x + (p2.x - p1.x) * 0.55,
+        y: p2.y + (p2.y - p1.y) * 0.55,
+    };
+    const points = [];
+    for (let i = 0; i <= segmentCount; i++) {
+        points.push(sampleCatmullRomPoint(p0, p1, p2, p3, i / segmentCount));
+    }
+    return points;
+}
+
+function spawnCursorTrailStreak(fromX, fromY, toX, toY, distance, now, ageIndex = 0, followX = 0, followY = 0) {
+    const layer = ensureCursorTrailLayer();
+    const palette = cursorTrailPalette.length ? cursorTrailPalette : getCursorThemePalette(getActiveCursorThemeWorld());
+    const primary = palette[0] || [212, 168, 67];
+    const core = palette[3] || [245, 240, 224];
+    const shadow = palette[1] || [74, 139, 194];
+    const safeDistance = Math.max(10, Math.min(distance || 10, 40));
+    const angle = Math.atan2(toY - fromY, toX - fromX) * 180 / Math.PI;
+    const centerX = (fromX + toX) / 2;
+    const centerY = (fromY + toY) / 2;
+    const thickness = Math.max(1.8, 5.4 - ageIndex * 0.42);
+    const followScale = Math.max(0.45, 1 - ageIndex * 0.08);
+    const streak = document.createElement("span");
+    streak.className = "cursor-trail-streak";
+    streak.style.left = `${centerX}px`;
+    streak.style.top = `${centerY}px`;
+    streak.style.width = `${safeDistance + 18}px`;
+    streak.style.setProperty("--streak-thickness", `${thickness}px`);
+    streak.style.setProperty("--streak-angle", `${angle}deg`);
+    streak.style.setProperty("--streak-follow-x", `${followX * followScale}px`);
+    streak.style.setProperty("--streak-follow-y", `${followY * followScale}px`);
+    streak.style.setProperty("--trail-rgb", primary.join(", "));
+    streak.style.setProperty("--trail-core-rgb", core.join(", "));
+    streak.style.setProperty("--trail-shadow-rgb", shadow.join(", "));
+    streak.addEventListener("animationend", () => removeCursorTrailDot(streak), { once: true });
+    layer.appendChild(streak);
+    cursorTrailDots.push(streak);
+    while (cursorTrailDots.length > CURSOR_TRAIL_MAX_DOTS) {
+        removeCursorTrailDot(cursorTrailDots[0]);
+    }
+}
+
+function spawnCursorClickFeedback(x, y) {
+    const layer = ensureCursorTrailLayer();
+    const palette = cursorTrailPalette.length ? cursorTrailPalette : getCursorThemePalette(getActiveCursorThemeWorld());
+    const primary = palette[0] || [212, 168, 67];
+    const core = palette[3] || [245, 240, 224];
+    const ripple = document.createElement("span");
+    ripple.className = "cursor-click-ripple";
+    ripple.style.left = `${x}px`;
+    ripple.style.top = `${y}px`;
+    ripple.style.setProperty("--click-rgb", primary.join(", "));
+    ripple.style.setProperty("--click-core-rgb", core.join(", "));
+    ripple.addEventListener("animationend", () => removeCursorClickElement(ripple), { once: true });
+    layer.appendChild(ripple);
+    cursorClickElements.push(ripple);
+
+    const sparkOffsets = [
+        [9, -7],
+        [13, 5],
+        [-8, 9],
+        [-11, -4],
+    ];
+    sparkOffsets.forEach(([sparkX, sparkY], index) => {
+        const spark = document.createElement("span");
+        spark.className = "cursor-click-spark";
+        spark.style.left = `${x}px`;
+        spark.style.top = `${y}px`;
+        spark.style.width = `${index === 0 ? 4 : 3}px`;
+        spark.style.height = spark.style.width;
+        spark.style.setProperty("--spark-x", `${sparkX}px`);
+        spark.style.setProperty("--spark-y", `${sparkY}px`);
+        spark.style.setProperty("--click-rgb", primary.join(", "));
+        spark.style.setProperty("--click-core-rgb", core.join(", "));
+        spark.addEventListener("animationend", () => removeCursorClickElement(spark), { once: true });
+        layer.appendChild(spark);
+        cursorClickElements.push(spark);
+    });
+
+    while (cursorClickElements.length > CURSOR_CLICK_MAX_ELEMENTS) {
+        removeCursorClickElement(cursorClickElements[0]);
+    }
+}
+
+function handleCursorTrailMove(event) {
+    if (!cursorTrailEnabled || document.hidden) return;
+    if (event.pointerType && event.pointerType !== "mouse") return;
+    const now = performance.now();
+    const x = event.clientX;
+    const y = event.clientY;
+    const dx = cursorTrailLastTime ? x - cursorTrailLastX : 8;
+    const dy = cursorTrailLastTime ? y - cursorTrailLastY : 0;
+    const distance = cursorTrailLastTime ? Math.hypot(dx, dy) : 10;
+    const elapsed = cursorTrailLastTime ? Math.max(8, now - cursorTrailLastTime) : 16;
+    const trailStyle = getCursorTrailStylePreference();
+    const minMs = trailStyle === "stardust" ? 16 : 8;
+    const minDistance = trailStyle === "stardust" ? 8 : 4;
+    if (cursorTrailLastTime && now - cursorTrailLastTime < minMs && distance < minDistance) return;
+    const fromX = cursorTrailLastTime ? cursorTrailLastX : x - 8;
+    const fromY = cursorTrailLastTime ? cursorTrailLastY : y;
+    cursorTrailLastX = x;
+    cursorTrailLastY = y;
+    cursorTrailLastTime = now;
+    cursorTrailLastDeltaX = distance > 0 ? dx : cursorTrailLastDeltaX;
+    cursorTrailLastDeltaY = distance > 0 ? dy : cursorTrailLastDeltaY;
+    pushCursorTrailPoint(x, y, now);
+    if (trailStyle === "stardust") {
+        spawnCursorTrailDot(x, y, distance, now);
+    } else {
+        const turnAmount = getCursorTrailTurnAmount();
+        const segmentCount = Math.max(1, Math.min(10, Math.ceil(distance / 32) + Math.ceil(turnAmount * 5)));
+        const pathPoints = buildCursorTrailPathPoints(fromX, fromY, x, y, segmentCount);
+        const endPoint = pathPoints[pathPoints.length - 1] || { x, y };
+        const beforeEndPoint = pathPoints[pathPoints.length - 2] || { x: fromX, y: fromY };
+        const tangentX = endPoint.x - beforeEndPoint.x;
+        const tangentY = endPoint.y - beforeEndPoint.y;
+        const tangentDistance = Math.hypot(tangentX, tangentY);
+        const lastDeltaDistance = Math.hypot(cursorTrailLastDeltaX, cursorTrailLastDeltaY) || 1;
+        const directionX = tangentDistance > 0.1 ? tangentX / tangentDistance : (cursorTrailLastDeltaX || 1) / lastDeltaDistance;
+        const directionY = tangentDistance > 0.1 ? tangentY / tangentDistance : cursorTrailLastDeltaY / lastDeltaDistance;
+        const speed = distance / elapsed;
+        const followDistance = Math.max(4, Math.min(18, distance * 0.1 + speed * 2.2 + turnAmount * 4));
+        const followX = directionX * followDistance;
+        const followY = directionY * followDistance;
+        for (let i = 1; i < pathPoints.length; i++) {
+            const previousPoint = pathPoints[i - 1];
+            const nextPoint = pathPoints[i];
+            spawnCursorTrailStreak(
+                previousPoint.x,
+                previousPoint.y,
+                nextPoint.x,
+                nextPoint.y,
+                Math.hypot(nextPoint.x - previousPoint.x, nextPoint.y - previousPoint.y),
+                now,
+                pathPoints.length - 1 - i,
+                followX,
+                followY
+            );
+        }
+    }
+}
+
+function handleCursorClick(event) {
+    if (!cursorClickFeedbackEnabled || document.hidden) return;
+    if (event.pointerType && event.pointerType !== "mouse") return;
+    if (event.button !== undefined && event.button !== 0) return;
+    spawnCursorClickFeedback(event.clientX, event.clientY);
+}
+
+function finePointerAvailable() {
+    return !window.matchMedia || !window.matchMedia("(pointer: coarse)").matches;
+}
+
+function setCursorTrailActive(active) {
+    const shouldEnable = Boolean(active) && finePointerAvailable();
+    cursorTrailEnabled = shouldEnable;
+    document.body.classList.toggle("cursor-trail-enabled", shouldEnable);
+    if (shouldEnable && !cursorTrailListenerAttached) {
+        window.addEventListener("pointermove", handleCursorTrailMove, { passive: true });
+        cursorTrailListenerAttached = true;
+    } else if (!shouldEnable && cursorTrailListenerAttached) {
+        window.removeEventListener("pointermove", handleCursorTrailMove);
+        cursorTrailListenerAttached = false;
+        clearCursorTrailDots();
+    }
+}
+
+function setCursorClickFeedbackActive(active) {
+    const shouldEnable = Boolean(active) && finePointerAvailable();
+    cursorClickFeedbackEnabled = shouldEnable;
+    document.body.classList.toggle("cursor-click-feedback-enabled", shouldEnable);
+    if (shouldEnable && !cursorClickListenerAttached) {
+        window.addEventListener("pointerdown", handleCursorClick, { passive: true });
+        cursorClickListenerAttached = true;
+    } else if (!shouldEnable && cursorClickListenerAttached) {
+        window.removeEventListener("pointerdown", handleCursorClick);
+        cursorClickListenerAttached = false;
+        clearCursorClickElements();
+    }
+}
+
+function updateCursorSettingsUi() {
+    const styleEnabled = getCursorStylePreference();
+    const trailEnabled = getCursorTrailPreference();
+    const tipGlowEnabled = getCursorTipGlowPreference();
+    const tipGlowRadius = getCursorTipGlowRadiusPreference();
+    const tipGlowRadiusOption = getCursorTipGlowRadiusOption(tipGlowRadius);
+    const clickEffectEnabled = getCursorClickEffectPreference();
+    const trailStyle = getCursorTrailStylePreference();
+    const trailStyleOption = CURSOR_TRAIL_STYLE_OPTIONS[getCursorTrailStyleIndex(trailStyle)];
+    if (cursorStyleCheckbox) cursorStyleCheckbox.checked = styleEnabled;
+    if (cursorTrailCheckbox) cursorTrailCheckbox.checked = trailEnabled;
+    if (cursorTipGlowCheckbox) cursorTipGlowCheckbox.checked = tipGlowEnabled;
+    if (cursorClickEffectCheckbox) cursorClickEffectCheckbox.checked = clickEffectEnabled;
+    if (cursorTipGlowRadiusValue) cursorTipGlowRadiusValue.textContent = t(tipGlowRadiusOption.labelKey);
+    if (cursorTipGlowRadiusPrevBtn) cursorTipGlowRadiusPrevBtn.disabled = !tipGlowEnabled;
+    if (cursorTipGlowRadiusNextBtn) cursorTipGlowRadiusNextBtn.disabled = !tipGlowEnabled;
+    if (cursorTrailStyleValue) cursorTrailStyleValue.textContent = t(trailStyleOption.labelKey);
+    if (cursorTrailStylePrevBtn) cursorTrailStylePrevBtn.disabled = !trailEnabled;
+    if (cursorTrailStyleNextBtn) cursorTrailStyleNextBtn.disabled = !trailEnabled;
+    if (cursorStyleNote) {
+        cursorStyleNote.textContent = styleEnabled
+            ? t("settings.cursor_style_enabled_note")
+            : t("settings.cursor_style_disabled_note");
+    }
+    if (cursorTrailNote) {
+        cursorTrailNote.textContent = trailEnabled
+            ? t(trailStyleOption.noteKey)
+            : t("settings.cursor_trail_disabled_note");
+    }
+    if (cursorTipGlowNote) {
+        cursorTipGlowNote.textContent = tipGlowEnabled
+            ? t("settings.cursor_tip_glow_enabled_note")
+            : t("settings.cursor_tip_glow_disabled_note");
+    }
+    if (cursorTipGlowRadiusNote) {
+        cursorTipGlowRadiusNote.textContent = t(tipGlowRadiusOption.noteKey);
+    }
+    if (cursorClickEffectNote) {
+        cursorClickEffectNote.textContent = clickEffectEnabled
+            ? t("settings.cursor_click_effect_enabled_note")
+            : t("settings.cursor_click_effect_disabled_note");
+    }
+    if (cursorTipGlowRadiusControl) cursorTipGlowRadiusControl.hidden = !tipGlowEnabled;
+    if (cursorTrailStyleControl) cursorTrailStyleControl.hidden = !trailEnabled;
+    if (cursorPreviewPanel) {
+        cursorPreviewPanel.dataset.trailStyle = trailStyle;
+        cursorPreviewPanel.dataset.tipGlowRadius = tipGlowRadius;
+        cursorPreviewPanel.classList.toggle("cursor-preview-style-off", !styleEnabled);
+        cursorPreviewPanel.classList.toggle("cursor-preview-trail-off", !trailEnabled);
+        cursorPreviewPanel.classList.toggle("cursor-preview-tip-glow-off", !tipGlowEnabled);
+        cursorPreviewPanel.classList.toggle("cursor-preview-click-effect-off", !clickEffectEnabled);
+    }
+    if (settingsView && settingsView.classList.contains("active")) {
+        if (settingsHeightSyncFrame) window.cancelAnimationFrame(settingsHeightSyncFrame);
+        syncSettingsPanelHeights();
+    }
+}
+
+function applyCursorPreferences(options = {}) {
+    applyCursorTheme(getActiveCursorThemeWorld());
+    document.body.classList.toggle("cursor-theme-enabled", getCursorStylePreference());
+    setCursorTrailActive(getCursorTrailPreference());
+    setCursorClickFeedbackActive(getCursorClickEffectPreference());
+    if (options.updateUi !== false) updateCursorSettingsUi();
+}
+
+function setCursorStylePreference(enabled) {
+    writeStoredBoolean(CURSOR_STYLE_STORAGE_KEY, Boolean(enabled));
+    applyCursorPreferences();
+}
+
+function setCursorTrailPreference(enabled) {
+    writeStoredBoolean(CURSOR_TRAIL_STORAGE_KEY, Boolean(enabled));
+    applyCursorPreferences();
+}
+
+function setCursorTipGlowPreference(enabled) {
+    writeStoredBoolean(CURSOR_TIP_GLOW_STORAGE_KEY, Boolean(enabled));
+    applyCursorPreferences();
+}
+
+function setCursorTipGlowRadiusPreference(radius) {
+    const selectedRadius = CURSOR_TIP_GLOW_RADIUS_OPTIONS.some((option) => option.value === radius) ? radius : "medium";
+    writeStoredString(CURSOR_TIP_GLOW_RADIUS_STORAGE_KEY, selectedRadius);
+    applyCursorPreferences();
+}
+
+function setCursorClickEffectPreference(enabled) {
+    writeStoredBoolean(CURSOR_CLICK_EFFECT_STORAGE_KEY, Boolean(enabled));
+    applyCursorPreferences();
+}
+
+function setCursorTrailStylePreference(style) {
+    const selectedStyle = CURSOR_TRAIL_STYLE_OPTIONS.some((option) => option.value === style) ? style : "laser";
+    writeStoredString(CURSOR_TRAIL_STYLE_STORAGE_KEY, selectedStyle);
+    clearCursorTrailDots();
+    applyCursorPreferences();
+}
+
+function cycleCursorTrailStyle(direction) {
+    const currentIndex = getCursorTrailStyleIndex();
+    const nextIndex = (currentIndex + direction + CURSOR_TRAIL_STYLE_OPTIONS.length) % CURSOR_TRAIL_STYLE_OPTIONS.length;
+    setCursorTrailStylePreference(CURSOR_TRAIL_STYLE_OPTIONS[nextIndex].value);
+}
+
+function cycleCursorTipGlowRadius(direction) {
+    const currentIndex = getCursorTipGlowRadiusIndex();
+    const nextIndex = (currentIndex + direction + CURSOR_TIP_GLOW_RADIUS_OPTIONS.length) % CURSOR_TIP_GLOW_RADIUS_OPTIONS.length;
+    setCursorTipGlowRadiusPreference(CURSOR_TIP_GLOW_RADIUS_OPTIONS[nextIndex].value);
+}
+
+function getCurrentVoiceSettings() {
+    const source = voiceSettingsDraft || (settingsData && settingsData.voice ? settingsData.voice : {});
+    const strength = VOICE_CORRECTION_OPTIONS.some((option) => option.value === source.correction_strength)
+        ? source.correction_strength
+        : DEFAULT_VOICE_SETTINGS.correction_strength;
+    const backend = VOICE_BACKEND_OPTIONS.some((option) => option.value === source.correction_backend)
+        ? source.correction_backend
+        : DEFAULT_VOICE_SETTINGS.correction_backend;
+    return {
+        correction_strength: strength,
+        correction_backend: backend,
+        auto_send: Boolean(source.auto_send),
+    };
+}
+
+function getVoiceCorrectionIndex(strength) {
+    const current = strength || getCurrentVoiceSettings().correction_strength;
+    const index = VOICE_CORRECTION_OPTIONS.findIndex((option) => option.value === current);
+    return index >= 0 ? index : 1;
+}
+
+function getVoiceBackendIndex(backend) {
+    const current = backend || getCurrentVoiceSettings().correction_backend;
+    const index = VOICE_BACKEND_OPTIONS.findIndex((option) => option.value === current);
+    return index >= 0 ? index : 0;
+}
+
+function setVoiceStatus(message, type = "", options = {}) {
+    if (!voiceStatus) return;
+    window.clearTimeout(voiceStatusResetTimer);
+    voiceStatusResetTimer = null;
+    voiceStatus.textContent = message || t("messages.voice_hint");
+    voiceStatus.className = `voice-status${type ? ` ${type}` : " hint"}`;
+    if (options.temporary) {
+        voiceStatusResetTimer = window.setTimeout(() => {
+            resetVoiceStatus();
+        }, options.duration || 2400);
+    }
+}
+
+function resetVoiceStatus() {
+    if (!voiceStatus) return;
+    window.clearTimeout(voiceStatusResetTimer);
+    voiceStatusResetTimer = null;
+    voiceStatus.textContent = t("messages.voice_hint");
+    voiceStatus.className = "voice-status hint";
+}
+
+function updateVoiceSettingsUi() {
+    const settings = getCurrentVoiceSettings();
+    const option = VOICE_CORRECTION_OPTIONS[getVoiceCorrectionIndex(settings.correction_strength)];
+    const backendOption = VOICE_BACKEND_OPTIONS[getVoiceBackendIndex(settings.correction_backend)];
+    const showRuntime = settings.correction_backend === "local" || (settings.correction_backend === "auto" && currentMode === "local");
+    if (voiceRuntimePanel) voiceRuntimePanel.classList.toggle("hidden", !showRuntime);
+    if (voiceBackendValue) voiceBackendValue.textContent = t(backendOption.labelKey);
+    if (voiceBackendNote) {
+        voiceBackendNote.textContent = t(backendOption.noteKey);
+        voiceBackendNote.classList.toggle("warning", settings.correction_backend === "online");
+    }
+    if (voiceCorrectionValue) voiceCorrectionValue.textContent = t(option.labelKey);
+    if (voiceAutoSendCheckbox) voiceAutoSendCheckbox.checked = settings.auto_send;
+    if (voicePreferenceNote) {
+        voicePreferenceNote.textContent = settings.auto_send
+            ? t("settings.voice_auto_send_note")
+            : t("settings.voice_manual_send_note");
+    }
+    scheduleSettingsPanelHeightSync();
+}
+
+function updateVoiceButtonState() {
+    if (!voiceBtn) return;
+    const supported = isVoiceRecordingSupported();
+    const label = voiceListening ? t("game.voice_button_stop") : t("game.voice_button");
+    voiceBtn.setAttribute("aria-label", label);
+    voiceBtn.setAttribute("title", supported ? label : t("messages.voice_not_supported"));
+    voiceBtn.setAttribute("aria-pressed", voiceListening ? "true" : "false");
+    voiceBtn.classList.toggle("listening", voiceListening);
+    voiceBtn.classList.toggle("busy", voiceBusy);
+    voiceBtn.disabled = !supported || (!voiceListening && (!voiceInputEnabled || isWaiting || voiceBusy || voiceFinishing));
+    if (!supported && window.I18N && voiceStatus && (!voiceStatus.textContent || voiceStatus.textContent === "messages.voice_not_supported")) {
+        setVoiceStatus(t("messages.voice_not_supported"), "error");
+    }
+    if (sendBtn) {
+        sendBtn.disabled = Boolean(commandInput && commandInput.disabled) || isWaiting || voiceListening || voiceBusy || voiceFinishing;
+    }
+}
+
+function getVoiceLanguage() {
+    return window.I18N && window.I18N.lang === "zh" ? "zh-CN" : "en-US";
+}
+
+function mergeVoiceTranscript(baseValue, transcript) {
+    const text = String(transcript || "").trim();
+    if (!text) return String(baseValue || "");
+    const base = String(baseValue || "");
+    const combined = base.trim()
+        ? `${base.trimEnd()} ${text}`
+        : text;
+    const maxLen = Number(commandInput && commandInput.maxLength) || 300;
+    return combined.slice(0, maxLen);
+}
+
+function normalizeVoiceText(text) {
+    return String(text || "")
+        .replace(/\s+/g, " ")
+        .replace(/([\u3400-\u9fff])\s+([\u3400-\u9fff])/g, "$1$2")
+        .trim();
+}
+
+function isVoiceRecordingSupported() {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    return Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AudioContextCtor);
+}
+
+function voiceRecordingErrorKey(err) {
+    const name = err && err.name ? err.name : "";
+    if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") {
+        return "errors.voice_permission";
+    }
+    if (
+        name === "NotFoundError"
+        || name === "DevicesNotFoundError"
+        || name === "NotReadableError"
+        || name === "TrackStartError"
+        || name === "OverconstrainedError"
+    ) {
+        return "errors.voice_audio_capture";
+    }
+    return "errors.voice_start";
+}
+
+function combineFloat32Chunks(chunks) {
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const combined = new Float32Array(totalLength);
+    let offset = 0;
+    chunks.forEach((chunk) => {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+    });
+    return combined;
+}
+
+function percentile(values, percent) {
+    if (!values.length) return 0;
+    const sorted = Array.from(values).sort((a, b) => a - b);
+    const index = (sorted.length - 1) * percent / 100;
+    const lower = Math.floor(index);
+    const upper = Math.ceil(index);
+    if (lower === upper) return sorted[lower];
+    return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
+}
+
+function applyVoiceNoiseGate(samples, noiseFloor) {
+    const gate = Math.max(noiseFloor * 0.85, VOICE_MIN_RMS * 0.45);
+    if (!Number.isFinite(gate) || gate <= 0) return samples;
+    const cleaned = new Float32Array(samples.length);
+    for (let i = 0; i < samples.length; i += 1) {
+        const value = samples[i];
+        cleaned[i] = Math.abs(value) < gate ? value * 0.25 : value;
+    }
+    return cleaned;
+}
+
+function analyzeVoiceSamples(samples, sampleRate) {
+    const durationSeconds = samples.length / Math.max(1, sampleRate);
+    if (!samples.length || durationSeconds < VOICE_MIN_RECORDING_SECONDS) {
+        return { hasSpeech: false, reason: "too_short", samples };
+    }
+
+    const frameSize = Math.max(1, Math.floor(sampleRate * VOICE_ANALYSIS_FRAME_SECONDS));
+    const paddingSamples = Math.max(0, Math.floor(sampleRate * VOICE_SILENCE_PADDING_SECONDS));
+    let totalSquares = 0;
+    let peak = 0;
+    let firstVoicedFrame = -1;
+    let lastVoicedFrame = -1;
+    let voicedFrames = 0;
+    const frameRmsValues = [];
+    const framePeakValues = [];
+
+    for (let frameStart = 0, frameIndex = 0; frameStart < samples.length; frameStart += frameSize, frameIndex += 1) {
+        const frameEnd = Math.min(samples.length, frameStart + frameSize);
+        let frameSquares = 0;
+        let framePeak = 0;
+        for (let i = frameStart; i < frameEnd; i += 1) {
+            const abs = Math.abs(samples[i]);
+            const square = samples[i] * samples[i];
+            totalSquares += square;
+            frameSquares += square;
+            if (abs > peak) peak = abs;
+            if (abs > framePeak) framePeak = abs;
+        }
+        const frameLength = Math.max(1, frameEnd - frameStart);
+        const frameRms = Math.sqrt(frameSquares / frameLength);
+        frameRmsValues.push(frameRms);
+        framePeakValues.push(framePeak);
+    }
+
+    const noiseFloor = percentile(frameRmsValues, 20);
+    const rmsP90 = percentile(frameRmsValues, 90);
+    const dynamicRatio = rmsP90 / Math.max(noiseFloor, 0.000001);
+    const rms = Math.sqrt(totalSquares / Math.max(1, samples.length));
+    const peakRmsRatio = peak / Math.max(rms, 0.000001);
+    const adaptiveFrameRms = Math.max(VOICE_FRAME_RMS, noiseFloor * VOICE_MIN_DYNAMIC_RATIO);
+
+    frameRmsValues.forEach((frameRms, frameIndex) => {
+        const framePeak = framePeakValues[frameIndex] || 0;
+        if (frameRms >= adaptiveFrameRms || framePeak >= VOICE_FRAME_PEAK) {
+            if (firstVoicedFrame < 0) firstVoicedFrame = frameIndex;
+            lastVoicedFrame = frameIndex;
+            voicedFrames += 1;
+        }
+    });
+
+    const voicedSeconds = voicedFrames * frameSize / Math.max(1, sampleRate);
+    const voicedRatio = voicedFrames / Math.max(1, frameRmsValues.length);
+    const dynamicOk = dynamicRatio >= VOICE_MIN_DYNAMIC_RATIO || peakRmsRatio >= VOICE_MIN_PEAK_RMS_RATIO;
+    const flatNoise = voicedRatio >= VOICE_MAX_FLAT_VOICED_RATIO && dynamicRatio < VOICE_MIN_DYNAMIC_RATIO;
+    const hasSpeech = peak >= VOICE_MIN_PEAK
+        && rms >= VOICE_MIN_RMS
+        && voicedSeconds >= VOICE_MIN_VOICED_SECONDS
+        && dynamicOk
+        && !flatNoise;
+    if (!hasSpeech || firstVoicedFrame < 0) {
+        return { hasSpeech: false, reason: dynamicOk ? "quiet" : "noise", rms, peak, voicedSeconds, dynamicRatio, peakRmsRatio, samples };
+    }
+
+    const trimStart = Math.max(0, firstVoicedFrame * frameSize - paddingSamples);
+    const trimEnd = Math.min(samples.length, (lastVoicedFrame + 1) * frameSize + paddingSamples);
+    const trimmedSamples = samples.slice(trimStart, trimEnd);
+    return {
+        hasSpeech: true,
+        reason: "speech",
+        rms,
+        peak,
+        voicedSeconds,
+        dynamicRatio,
+        peakRmsRatio,
+        samples: applyVoiceNoiseGate(trimmedSamples, noiseFloor),
+    };
+}
+
+function encodeWavFromFloat32(samples, sampleRate) {
+    const bytesPerSample = 2;
+    const blockAlign = bytesPerSample;
+    const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+    const view = new DataView(buffer);
+    const writeString = (offset, value) => {
+        for (let i = 0; i < value.length; i += 1) {
+            view.setUint8(offset + i, value.charCodeAt(i));
+        }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, samples.length * bytesPerSample, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i += 1) {
+        const sample = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += bytesPerSample;
+    }
+    return new Blob([buffer], { type: "audio/wav" });
+}
+
+function cleanupVoiceRecording() {
+    if (voiceRecordingTimer) {
+        window.clearTimeout(voiceRecordingTimer);
+        voiceRecordingTimer = null;
+    }
+    if (voiceProcessorNode) {
+        voiceProcessorNode.onaudioprocess = null;
+        try { voiceProcessorNode.disconnect(); } catch (_err) { /* ignore cleanup failures */ }
+        voiceProcessorNode = null;
+    }
+    if (voiceSourceNode) {
+        try { voiceSourceNode.disconnect(); } catch (_err) { /* ignore cleanup failures */ }
+        voiceSourceNode = null;
+    }
+    if (voiceMediaStream) {
+        voiceMediaStream.getTracks().forEach((track) => track.stop());
+        voiceMediaStream = null;
+    }
+    if (voiceAudioContext) {
+        const contextToClose = voiceAudioContext;
+        voiceAudioContext = null;
+        if (typeof contextToClose.close === "function") {
+            contextToClose.close().catch(() => {});
+        }
+    }
+}
+
+function voiceTranscriptionErrorKey(data) {
+    if (data && data.code === "voice_empty") return "errors.voice_empty";
+    if (data && data.code === "voice_unusable") return "errors.voice_unusable";
+    return "errors.voice_transcribe";
+}
+
+async function transcribeVoiceAudio(wavBlob, requestId) {
+    try {
+        const settings = getCurrentVoiceSettings();
+        const formData = new FormData();
+        formData.append("audio", wavBlob, "voice-input.wav");
+        formData.append("correction_strength", settings.correction_strength);
+        formData.append("correction_backend", settings.correction_backend);
+        formData.append("language", getVoiceLanguage());
+        formData.append("request_id", String(requestId));
+
+        const resp = await fetch("/api/voice/transcribe", {
+            method: "POST",
+            body: formData,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (requestId !== voiceActiveRequestId) return { text: "", stale: true };
+        if (data && (data.voice_runtime_checked || data.voice_stt_ready !== undefined)) {
+            updateVoiceRuntimeSettingsStatus(data);
+        }
+        if (!resp.ok) {
+            setVoiceStatus(t(voiceTranscriptionErrorKey(data)), "error");
+            return { text: "", stale: false, blocked: true };
+        }
+        if (data.experience_remaining_percent !== undefined && settingsData && settingsData.deepseek) {
+            settingsData.deepseek.experience_remaining_percent = data.experience_remaining_percent;
+            settingsData.deepseek.experience_remaining_tokens = data.experience_remaining_tokens;
+            updateExperienceSettings(settingsData.deepseek);
+        }
+        if (data.code === "voice_unusable") {
+            setVoiceStatus(t("errors.voice_unusable"), "error");
+            return { text: "", stale: false, blocked: true };
+        }
+        return { text: normalizeVoiceText(data.text || data.raw_text || ""), stale: false, blocked: false };
+    } catch (err) {
+        if (requestId !== voiceActiveRequestId) return { text: "", stale: true };
+        console.warn("Voice transcription failed:", err);
+        setVoiceStatus(t("errors.voice_transcribe"), "error");
+        return { text: "", stale: false, blocked: true };
+    }
+}
+
+async function finishVoiceRecording() {
+    if (voiceFinishing) return;
+    if (!voiceListening && !voicePcmChunks.length) return;
+    voiceFinishing = true;
+    const requestId = voiceCurrentRecordingId;
+    const chunks = voicePcmChunks.slice();
+    const sampleRate = voiceRecordingSampleRate;
+    voicePcmChunks = [];
+    voiceListening = false;
+    cleanupVoiceRecording();
+    updateVoiceButtonState();
+
+    if (!chunks.length) {
+        voiceActiveRequestId = 0;
+        voiceFinishing = false;
+        setVoiceStatus(t("errors.voice_empty"), "error");
+        updateVoiceButtonState();
+        commandInput.focus();
+        return;
+    }
+
+    const samples = combineFloat32Chunks(chunks);
+    const analysis = analyzeVoiceSamples(samples, sampleRate);
+    if (!analysis.hasSpeech) {
+        voiceActiveRequestId = 0;
+        voiceFinishing = false;
+        setVoiceStatus(t("errors.voice_empty"), "error");
+        updateVoiceButtonState();
+        commandInput.focus();
+        return;
+    }
+
+    voiceBusy = true;
+    updateVoiceButtonState();
+    setVoiceStatus(t("messages.voice_transcribing"));
+    const wavBlob = encodeWavFromFloat32(analysis.samples, sampleRate);
+    const result = await transcribeVoiceAudio(wavBlob, requestId);
+    voiceBusy = false;
+    voiceFinishing = false;
+    updateVoiceButtonState();
+
+    if (result.stale || requestId !== voiceActiveRequestId) {
+        return;
+    }
+
+    if (!result.text) {
+        commandInput.value = voiceBaseInput;
+        commandInput.focus();
+        voiceActiveRequestId = 0;
+        updateVoiceButtonState();
+        return;
+    }
+
+    commandInput.value = mergeVoiceTranscript(voiceBaseInput, result.text);
+    commandInput.focus();
+    voiceActiveRequestId = 0;
+
+    if (getCurrentVoiceSettings().auto_send && commandInput.value.trim()) {
+        setVoiceStatus(t("messages.voice_auto_sent"), "success", { temporary: true });
+        if (typeof commandForm.requestSubmit === "function") {
+            commandForm.requestSubmit();
+        } else {
+            commandForm.dispatchEvent(new Event("submit", { cancelable: true }));
+        }
+    } else {
+        setVoiceStatus(t("messages.voice_inserted"), "success", { temporary: true });
+    }
+}
+
+function stopVoiceInput() {
+    if (!voiceListening) return;
+    finishVoiceRecording();
+}
+
+async function startVoiceInput() {
+    if (!isVoiceRecordingSupported()) {
+        setVoiceStatus(t("messages.voice_not_supported"), "error");
+        updateVoiceButtonState();
+        return;
+    }
+    if (!voiceInputEnabled || isWaiting || voiceBusy || voiceFinishing) return;
+
+    voiceBaseInput = commandInput.value;
+    voicePcmChunks = [];
+    voiceRecordingSequence += 1;
+    voiceCurrentRecordingId = voiceRecordingSequence;
+    voiceActiveRequestId = voiceCurrentRecordingId;
+
+    try {
+        voiceMediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+            },
+        });
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        voiceAudioContext = new AudioContextCtor();
+        if (voiceAudioContext.state === "suspended" && typeof voiceAudioContext.resume === "function") {
+            await voiceAudioContext.resume();
+        }
+        voiceRecordingSampleRate = voiceAudioContext.sampleRate || 16000;
+        voiceSourceNode = voiceAudioContext.createMediaStreamSource(voiceMediaStream);
+        voiceProcessorNode = voiceAudioContext.createScriptProcessor(4096, 1, 1);
+        voiceProcessorNode.onaudioprocess = (event) => {
+            if (!voiceListening) return;
+            const input = event.inputBuffer.getChannelData(0);
+            voicePcmChunks.push(new Float32Array(input));
+            const output = event.outputBuffer.getChannelData(0);
+            output.fill(0);
+        };
+        voiceSourceNode.connect(voiceProcessorNode);
+        voiceProcessorNode.connect(voiceAudioContext.destination);
+        voiceListening = true;
+        setVoiceStatus(t("messages.voice_recording"));
+        updateVoiceButtonState();
+        voiceRecordingTimer = window.setTimeout(() => {
+            if (voiceListening) finishVoiceRecording();
+        }, VOICE_MAX_RECORDING_MS);
+    } catch (err) {
+        console.warn("Voice recording start failed:", err);
+        voiceListening = false;
+        voicePcmChunks = [];
+        voiceActiveRequestId = 0;
+        voiceCurrentRecordingId = 0;
+        cleanupVoiceRecording();
+        setVoiceStatus(t(voiceRecordingErrorKey(err)), "error");
+        updateVoiceButtonState();
+    }
+}
+
+async function saveVoiceSettings(partial) {
+    const current = voiceSettingsDraft || getCurrentVoiceSettings();
+    const next = {
+        correction_strength: partial.correction_strength || current.correction_strength,
+        correction_backend: partial.correction_backend || current.correction_backend,
+        auto_send: partial.auto_send !== undefined ? Boolean(partial.auto_send) : current.auto_send,
+    };
+    if (!settingsData) settingsData = {};
+    settingsData.voice = next;
+    voiceSettingsDraft = next;
+    updateVoiceSettingsUi();
+    pendingVoiceSettingsPatch = next;
+    if (voiceSettingsBusy) return;
+    voiceSettingsBusy = true;
+    try {
+        while (pendingVoiceSettingsPatch) {
+            const payload = pendingVoiceSettingsPatch;
+            pendingVoiceSettingsPatch = null;
+            await postSettings({ voice: payload });
+            if (pendingVoiceSettingsPatch) {
+                settingsData.voice = pendingVoiceSettingsPatch;
+                voiceSettingsDraft = pendingVoiceSettingsPatch;
+                updateVoiceSettingsUi();
+            }
+        }
+        voiceSettingsDraft = null;
+    } catch (err) {
+        console.error("Voice settings update failed:", err);
+        setSettingsStatus(err.message || t("errors.settings_update"), "error");
+        pendingVoiceSettingsPatch = null;
+        voiceSettingsDraft = null;
+        await loadSettings(true);
+    } finally {
+        voiceSettingsBusy = false;
+        if (!pendingVoiceSettingsPatch) voiceSettingsDraft = null;
+        updateVoiceButtonState();
+    }
+}
+
+function cycleVoiceCorrection(direction) {
+    const currentIndex = getVoiceCorrectionIndex();
+    const nextIndex = (currentIndex + direction + VOICE_CORRECTION_OPTIONS.length) % VOICE_CORRECTION_OPTIONS.length;
+    saveVoiceSettings({ correction_strength: VOICE_CORRECTION_OPTIONS[nextIndex].value });
+}
+
+function cycleVoiceBackend(direction) {
+    const currentIndex = getVoiceBackendIndex();
+    const nextIndex = (currentIndex + direction + VOICE_BACKEND_OPTIONS.length) % VOICE_BACKEND_OPTIONS.length;
+    saveVoiceSettings({ correction_backend: VOICE_BACKEND_OPTIONS[nextIndex].value });
 }
 
 function renderTutorialContent(container) {
@@ -1672,10 +3142,11 @@ async function loadGalleryPages() {
     if (galleryIsLoading) return;
     galleryPages = [];  // Reset so language switch triggers reload
     galleryIsLoading = true;
+    const currentLang = getCurrentInterfaceLanguage();
+    galleryLanguage = currentLang;
     renderGalleryPage();
 
     try {
-        const currentLang = (settingsData && settingsData.language && settingsData.language.current) || localStorage.getItem("cursed_canvas_lang") || "en";
         const resp = await fetch("/api/gallery?lang=" + encodeURIComponent(currentLang));
         if (!resp.ok) throw new Error("Gallery request failed");
         const payload = await resp.json();
@@ -1698,6 +3169,10 @@ async function openGallery() {
     showStartStatus("");
     showStartView("gallery");
     if (galleryView) galleryView.focus();
+    if (galleryLanguage && galleryLanguage !== getCurrentInterfaceLanguage()) {
+        galleryPages = [];
+        galleryPageIndex = 0;
+    }
     await loadGalleryPages();
     renderGalleryPage({ animate: false });
 }
@@ -1739,11 +3214,13 @@ function setSettingsModelView(mode) {
     if (modelProviderValue) modelProviderValue.textContent = t(selectedOption.labelKey);
     if (deepseekSettingsPanel) deepseekSettingsPanel.classList.toggle("hidden", settingsModelView !== "api");
     if (localModelSettingsPanel) localModelSettingsPanel.classList.toggle("hidden", settingsModelView !== "local");
+    scheduleSettingsPanelHeightSync();
 }
 
 function setModeButtonsActive(mode, options = {}) {
     currentMode = mode || currentMode;
     setSettingsModelView(options.settingsMode || currentMode);
+    updateVoiceSettingsUi();
 }
 
 function setLanguageDisplay() {
@@ -1844,16 +3321,63 @@ function updateLocalModelSettingsStatus(data) {
     }
 }
 
+function updateVoiceRuntimeSettingsStatus(data) {
+    if (!data) return;
+    lastModelStatusData = {...(lastModelStatusData || {}), ...data};
+    updateSidePanelModelStatusRows(lastModelStatusData);
+    if (!voiceRuntimeDot || !voiceRuntimeStatus || !voiceRuntimeDetail) return;
+    const runtimeOk = data.voice_runtime_ok === true || data.ok === true;
+    const loading = Boolean(data.voice_stt_loading);
+    const checked = data.voice_runtime_checked === true || data.voice_runtime_ok !== undefined || data.ok !== undefined || Boolean(data.voice_stt_error);
+    const ready = Boolean(data.voice_stt_ready);
+    const failed = data.voice_runtime_ok === false || Boolean(data.voice_stt_error || data.voice_runtime_error || data.error);
+    voiceRuntimeDot.classList.remove("online", "loading", "offline");
+    voiceRuntimeDetail.classList.remove("warning");
+    if (ready) {
+        voiceRuntimeDot.classList.add("online");
+        voiceRuntimeStatus.textContent = t("settings.voice_runtime_ready");
+        voiceRuntimeDetail.textContent = t("settings.voice_runtime_ready_detail");
+    } else if (failed && checked) {
+        voiceRuntimeDot.classList.add("offline");
+        voiceRuntimeStatus.textContent = t("settings.voice_runtime_unavailable");
+        const diagnostic = data.voice_stt_error || data.voice_runtime_error || data.error || "";
+        voiceRuntimeDetail.textContent = diagnostic
+            ? `${t("settings.voice_runtime_unavailable_detail")} ${t("settings.local_model_diagnostic")} ${diagnostic}`
+            : t("settings.voice_runtime_unavailable_detail");
+        voiceRuntimeDetail.classList.add("warning");
+    } else if (loading || runtimeOk) {
+        voiceRuntimeDot.classList.add("loading");
+        voiceRuntimeStatus.textContent = t("settings.voice_runtime_loading");
+        voiceRuntimeDetail.textContent = t("settings.voice_runtime_loading_detail");
+    } else if (checked) {
+        voiceRuntimeDot.classList.add("offline");
+        voiceRuntimeStatus.textContent = t("settings.voice_runtime_unavailable");
+        const diagnostic = data.voice_stt_error || data.voice_runtime_error || data.error || "";
+        voiceRuntimeDetail.textContent = diagnostic
+            ? `${t("settings.voice_runtime_unavailable_detail")} ${t("settings.local_model_diagnostic")} ${diagnostic}`
+            : t("settings.voice_runtime_unavailable_detail");
+        voiceRuntimeDetail.classList.add("warning");
+    } else {
+        voiceRuntimeDot.classList.add("loading");
+        voiceRuntimeStatus.textContent = t("settings.voice_runtime_checking");
+        voiceRuntimeDetail.textContent = t("settings.voice_runtime_detail");
+    }
+}
+
 function updateSettingsUi(data) {
     if (!data) return;
     settingsData = data;
     setLanguageDisplay();
     updateTutorialSettingsUi();
+    updateCursorSettingsUi();
     setModeButtonsActive(data.active_mode || currentMode, { settingsMode: data.active_mode || currentMode });
     const deepseek = data.deepseek || {};
     updateExperienceSettings(deepseek);
     updatePersonalApiSettings(deepseek);
     updateLocalModelSettingsStatus(data);
+    updateVoiceRuntimeSettingsStatus(data);
+    updateVoiceSettingsUi();
+    scheduleSettingsPanelHeightSync();
 }
 
 async function loadSettings(silent = false) {
@@ -1930,13 +3454,39 @@ function cycleSettingsModel(direction) {
     switchModelMode(SETTINGS_MODEL_OPTIONS[nextIndex].mode);
 }
 
+function isNewAdventureTransitionBusy() {
+    return Boolean(newAdventurePreparing || newAdventureTransitionLocked);
+}
+
+function updateLanguageControlsDisabled() {
+    const disabled = Boolean(languageSwitchBusy || isNewAdventureTransitionBusy());
+    if (languagePrevBtn) languagePrevBtn.disabled = disabled;
+    if (languageNextBtn) languageNextBtn.disabled = disabled;
+}
+
+function updateNewAdventureTransitionControls() {
+    const busy = Boolean(languageSwitchBusy || isNewAdventureTransitionBusy());
+    if (settingsFlowNextBtn) settingsFlowNextBtn.disabled = busy;
+    if (tutorialNextBtn) tutorialNextBtn.disabled = busy;
+    updateLanguageControlsDisabled();
+}
+
+function setNewAdventureTransitionLocked(locked) {
+    newAdventureTransitionLocked = Boolean(locked);
+    if (settingsView) settingsView.classList.toggle("new-adventure-transition-locked", newAdventureTransitionLocked);
+    if (tutorialView) tutorialView.classList.toggle("new-adventure-transition-locked", newAdventureTransitionLocked);
+    updateNewAdventureTransitionControls();
+}
+
 function setNewAdventureFlowActive(active) {
     newAdventureFlowActive = Boolean(active);
     if (settingsView) settingsView.classList.toggle("onboarding-flow", newAdventureFlowActive);
     if (tutorialView) tutorialView.classList.toggle("onboarding-flow", newAdventureFlowActive);
+    updateNewAdventureTransitionControls();
 }
 
 function cancelNewAdventureFlow() {
+    setNewAdventureTransitionLocked(false);
     setNewAdventureFlowActive(false);
     settingsReturnTarget = "menu";
     newAdventurePrepared = false;
@@ -1961,8 +3511,10 @@ async function openSettings(source = "menu") {
         startStartParticles();
     }
     showStartView("settings");
+    resetSettingsViewForOpen();
     if (settingsView) settingsView.focus();
     await loadSettings();
+    resetSettingsScrollPosition();
     updateTutorialSettingsUi();
 }
 
@@ -1977,6 +3529,8 @@ function closeSettings() {
             if (isWaiting) {
                 commandInput.disabled = false;
                 sendBtn.disabled = true;
+                voiceInputEnabled = true;
+                updateVoiceButtonState();
             } else {
                 setGameInputEnabled(true);
             }
@@ -2096,6 +3650,8 @@ function resetClientViewForNewAdventure() {
 
 function enterGameFromIntro() {
     if (startScreenDismissed || !introStory || !introStory.classList.contains("active")) return;
+    if (languageSwitchBusy || newAdventurePreparing) return;
+    setNewAdventureTransitionLocked(true);
     markTutorialSeen();
     setNewAdventureFlowActive(false);
     newAdventurePrepared = false;
@@ -2114,6 +3670,7 @@ function enterGameFromIntro() {
     activeSaveSlotIndex = null;
     setUnsavedProgress(true);
     commandInput.focus();
+    setNewAdventureTransitionLocked(false);
 }
 
 function showMainMenuOverlay() {
@@ -2180,6 +3737,7 @@ function returnToMainMenuFromGame() {
 async function beginNewAdventure() {
     if (!newAdventureBtn) return;
     newAdventureBtn.disabled = true;
+    setNewAdventureTransitionLocked(false);
     setNewAdventureFlowActive(true);
     newAdventurePrepared = false;
     newAdventurePreparing = false;
@@ -2193,17 +3751,15 @@ async function prepareNewAdventureRun() {
     if (newAdventurePrepared) return true;
     if (newAdventurePreparing) return false;
     newAdventurePreparing = true;
+    updateNewAdventureTransitionControls();
     setSettingsStatus(t("start.starting_adventure"));
-    if (settingsFlowNextBtn) settingsFlowNextBtn.disabled = true;
-    if (tutorialNextBtn) tutorialNextBtn.disabled = true;
     try {
         await fetch("/api/reset", { method: "POST" });
     } catch (e) {
         console.warn("Reset before new adventure failed:", e);
     } finally {
-        if (settingsFlowNextBtn) settingsFlowNextBtn.disabled = false;
-        if (tutorialNextBtn) tutorialNextBtn.disabled = false;
         newAdventurePreparing = false;
+        updateNewAdventureTransitionControls();
     }
 
     resetClientViewForNewAdventure();
@@ -2214,16 +3770,22 @@ async function prepareNewAdventureRun() {
 }
 
 async function showIntroForNewAdventure() {
+    if (languageSwitchBusy || newAdventureTransitionLocked) return;
+    setNewAdventureTransitionLocked(true);
     const prepared = await prepareNewAdventureRun();
-    if (!prepared) return;
+    if (!prepared) {
+        setNewAdventureTransitionLocked(false);
+        return;
+    }
     setSettingsStatus("");
     setNewAdventureFlowActive(false);
     showStartView("intro");
     if (introStory) introStory.focus();
+    setNewAdventureTransitionLocked(false);
 }
 
 function advanceFromNewAdventureSettings() {
-    if (!newAdventureFlowActive || newAdventurePreparing) return;
+    if (!newAdventureFlowActive || newAdventurePreparing || newAdventureTransitionLocked || languageSwitchBusy) return;
     if (isTutorialEnabledForNewAdventure()) {
         renderTutorialContent(tutorialPage);
         showStartView("tutorial");
@@ -2305,6 +3867,12 @@ if (settingsFlowNextBtn) {
     settingsFlowNextBtn.addEventListener("click", advanceFromNewAdventureSettings);
 }
 
+settingsTabButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+        setSettingsTab(button.dataset.settingsTab || settingsActiveTab);
+    });
+});
+
 if (tutorialEnabledCheckbox) {
     tutorialEnabledCheckbox.addEventListener("change", () => {
         setTutorialEnabledPreference(tutorialEnabledCheckbox.checked);
@@ -2373,6 +3941,68 @@ if (modelPrevBtn) {
 
 if (modelNextBtn) {
     modelNextBtn.addEventListener("click", () => cycleSettingsModel(1));
+}
+
+if (voiceBackendPrevBtn) {
+    voiceBackendPrevBtn.addEventListener("click", () => cycleVoiceBackend(-1));
+}
+
+if (voiceBackendNextBtn) {
+    voiceBackendNextBtn.addEventListener("click", () => cycleVoiceBackend(1));
+}
+
+if (voiceCorrectionPrevBtn) {
+    voiceCorrectionPrevBtn.addEventListener("click", () => cycleVoiceCorrection(-1));
+}
+
+if (voiceCorrectionNextBtn) {
+    voiceCorrectionNextBtn.addEventListener("click", () => cycleVoiceCorrection(1));
+}
+
+if (voiceAutoSendCheckbox) {
+    voiceAutoSendCheckbox.addEventListener("change", () => {
+        saveVoiceSettings({ auto_send: voiceAutoSendCheckbox.checked });
+    });
+}
+
+if (cursorStyleCheckbox) {
+    cursorStyleCheckbox.addEventListener("change", () => {
+        setCursorStylePreference(cursorStyleCheckbox.checked);
+    });
+}
+
+if (cursorTrailCheckbox) {
+    cursorTrailCheckbox.addEventListener("change", () => {
+        setCursorTrailPreference(cursorTrailCheckbox.checked);
+    });
+}
+
+if (cursorTipGlowCheckbox) {
+    cursorTipGlowCheckbox.addEventListener("change", () => {
+        setCursorTipGlowPreference(cursorTipGlowCheckbox.checked);
+    });
+}
+
+if (cursorTipGlowRadiusPrevBtn) {
+    cursorTipGlowRadiusPrevBtn.addEventListener("click", () => cycleCursorTipGlowRadius(-1));
+}
+
+if (cursorTipGlowRadiusNextBtn) {
+    cursorTipGlowRadiusNextBtn.addEventListener("click", () => cycleCursorTipGlowRadius(1));
+}
+
+if (cursorClickEffectCheckbox) {
+    cursorClickEffectCheckbox.addEventListener("change", () => {
+        setCursorClickEffectPreference(cursorClickEffectCheckbox.checked);
+    });
+}
+
+if (cursorTrailStylePrevBtn) {
+    cursorTrailStylePrevBtn.addEventListener("click", () => cycleCursorTrailStyle(-1));
+}
+
+if (cursorTrailStyleNextBtn) {
+    cursorTrailStyleNextBtn.addEventListener("click", () => cycleCursorTrailStyle(1));
 }
 
 if (personalApiToggle) {
@@ -2734,6 +4364,43 @@ const QUICK_ACTIONS = {
     ]
 };
 
+const WORLD_EXIT_TARGETS = {
+    museum: ["starry_night", "great_wave", "impression_sunrise"],
+    starry_night: ["museum"],
+    great_wave: ["museum"],
+    impression_sunrise: ["museum"],
+};
+
+function getLocalizedMoveCommand(targetWorldId) {
+    const lang = window.I18N && window.I18N.lang ? window.I18N.lang : "en";
+    if (targetWorldId === "museum") {
+        return lang === "zh" ? "（返回博物馆）" : "(return to museum)";
+    }
+    const commandMap = {
+        starry_night: { en: "(enter starry night)", zh: "（进入星月夜）" },
+        great_wave: { en: "(enter great wave)", zh: "（进入神奈川冲浪里）" },
+        impression_sunrise: { en: "(enter impression sunrise)", zh: "（进入印象·日出）" },
+    };
+    const command = commandMap[targetWorldId];
+    return command ? (command[lang] || command.en) : `(${targetWorldId.replace(/_/g, " ")})`;
+}
+
+function renderLocalizedExitsForWorld(worldId) {
+    if (!exitsList) return;
+    const targets = WORLD_EXIT_TARGETS[worldId] || [];
+    exitsList.innerHTML = "";
+    targets.forEach((targetWorldId) => {
+        const btn = document.createElement("button");
+        btn.className = "exit-btn";
+        btn.textContent = "\u2192 " + formatWorldTitle(targetWorldId);
+        btn.addEventListener("click", () => {
+            commandInput.value = getLocalizedMoveCommand(targetWorldId);
+            commandForm.dispatchEvent(new Event("submit"));
+        });
+        exitsList.appendChild(btn);
+    });
+}
+
 // ══════════════════════════════════════════════════════════════
 // Message display
 // ══════════════════════════════════════════════════════════════
@@ -2859,6 +4526,12 @@ function updateSidePanel(data) {
             locationBadge.textContent = worldDisplayName;
             locationName.textContent = worldDisplayName;
         }
+        const worldDescription = t("world_descriptions." + currentWorld);
+        if (worldDescription && !worldDescription.startsWith("world_descriptions.")) {
+            locationDesc.textContent = worldDescription;
+        }
+        renderLocalizedExitsForWorld(currentWorld);
+        updateQuickActions(currentWorld);
         // Re-render inventory with existing detail list (if any)
         renderInventorySummary(currentWorld);
         renderInventoryDialog();
@@ -2896,7 +4569,7 @@ function updateSidePanel(data) {
             btn.className = "exit-btn";
             btn.textContent = "→ " + ex.name;
             btn.addEventListener("click", () => {
-                commandInput.value = "(go to " + ex.name.toLowerCase() + ")";
+                commandInput.value = getLocalizedMoveCommand(ex.target);
                 commandForm.dispatchEvent(new Event("submit"));
             });
             exitsList.appendChild(btn);
@@ -3021,34 +4694,62 @@ panelToggle.addEventListener("click", () => {
     panelToggle.textContent = sidePanel.classList.contains("collapsed") ? t("game.panel_toggle_collapsed") : t("game.panel_toggle");
 });
 
+function setModelStatusRow(row, dotClass, label) {
+    if (!row) return;
+    const dot = row.querySelector(".status-dot");
+    const text = row.querySelector("span:last-child");
+    if (dot) {
+        dot.classList.remove("online", "loading", "offline");
+        dot.classList.add(dotClass);
+    }
+    if (text) text.textContent = label;
+}
+
+function updateSidePanelModelStatusRows(data) {
+    const localProgress = clampPercent(data.local_progress_percent ?? (data.local_ready ? 100 : data.local_loading ? 35 : 0));
+    const apiAvailable = data.api_available !== false;
+    setModelStatusRow(
+        apiModelStatusText,
+        apiAvailable ? "online" : "offline",
+        apiAvailable ? t("model_status.deepseek_ready") : t("model_status.deepseek_unavailable")
+    );
+
+    if (data.local_ready) {
+        setModelStatusRow(localChatModelStatusText, "online", t("model_status.local_chat_ready"));
+    } else if (data.local_loading) {
+        setModelStatusRow(localChatModelStatusText, "loading", t("model_status.local_chat_loading", {pct: localProgress}));
+    } else {
+        setModelStatusRow(localChatModelStatusText, "offline", t("model_status.local_chat_unavailable"));
+    }
+
+    const voiceKnown = data.voice_stt_ready !== undefined ||
+        data.voice_stt_loading !== undefined ||
+        data.voice_runtime_ok !== undefined ||
+        data.voice_runtime_checked !== undefined ||
+        Boolean(data.voice_stt_error || data.voice_runtime_error);
+    const voiceReady = Boolean(data.voice_stt_ready);
+    const voiceLoading = Boolean(data.voice_stt_loading) && !voiceReady;
+    if (voiceReady) {
+        setModelStatusRow(localVoiceModelStatusText, "online", t("model_status.local_voice_ready"));
+    } else if (voiceLoading) {
+        setModelStatusRow(localVoiceModelStatusText, "loading", t("model_status.local_voice_loading"));
+    } else if (voiceKnown && (data.voice_runtime_ok === false || data.voice_stt_error || data.voice_runtime_error)) {
+        setModelStatusRow(localVoiceModelStatusText, "offline", t("model_status.local_voice_unavailable"));
+    } else {
+        setModelStatusRow(localVoiceModelStatusText, "loading", t("model_status.local_voice_idle"));
+    }
+}
+
 function updateModelStatus(data, options = {}) {
+    if (!data) return;
+    lastModelStatusData = {...(lastModelStatusData || {}), ...data};
     const mode = data.active_mode || currentMode;
     currentMode = mode;
     setModeButtonsActive(mode, {
         settingsMode: options.settingsMode || (isSettingsOpen() ? settingsModelView : mode)
     });
-    let dotClass = "online";
-    let text = "";
-    const localProgress = clampPercent(data.local_progress_percent ?? (data.local_ready ? 100 : data.local_loading ? 35 : 0));
-
-    if (mode === "api") {
-        dotClass = "online";
-        text = t("model_status.deepseek_ready");
-    } else if (mode === "local") {
-        if (data.local_ready) {
-            dotClass = "online";
-            text = t("model_status.local_ready");
-        } else if (data.local_loading) {
-            dotClass = "loading";
-            text = t("model_status.local_loading", {pct: localProgress});
-        } else {
-            dotClass = "offline";
-            text = t("model_status.local_unavailable");
-        }
-    }
-
-    modelStatusText.innerHTML = `<span class="status-dot ${dotClass}"></span> ${text}`;
-    updateLocalModelSettingsStatus(data);
+    updateSidePanelModelStatusRows(lastModelStatusData);
+    updateLocalModelSettingsStatus(lastModelStatusData);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -3059,6 +4760,7 @@ async function sendCommand(command) {
     if (isWaiting || !command.trim()) return;
     isWaiting = true;
     sendBtn.disabled = true;
+    updateVoiceButtonState();
 
     addMessage(command, "player");
 
@@ -3137,6 +4839,7 @@ async function sendCommand(command) {
     } finally {
         isWaiting = false;
         sendBtn.disabled = commandInput.disabled;
+        updateVoiceButtonState();
         commandInput.focus();
     }
 }
@@ -3146,8 +4849,20 @@ commandForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const cmd = commandInput.value;
     commandInput.value = "";
+    resetVoiceStatus();
     sendCommand(cmd);
 });
+
+if (voiceBtn) {
+    voiceBtn.addEventListener("click", () => {
+        if (voiceListening) {
+            stopVoiceInput();
+        } else {
+            startVoiceInput();
+        }
+    });
+    updateVoiceButtonState();
+}
 
 // ── Quick actions ──
 quickActions.addEventListener("click", (e) => {
@@ -3185,6 +4900,7 @@ window.addEventListener("resize", () => {
     resizeCanvas();
     resizeTitleParticleCanvas();
     resizeStartParticleCanvas();
+    scheduleSettingsPanelHeightSync();
 });
 resizeCanvas();
 
@@ -3239,6 +4955,7 @@ function createParticle(world) {
 
 function setParticleWorld(world) {
     particleWorld = world;
+    applyCursorTheme(world);
     particles = [];
     for (let i = 0; i < MAX_PARTICLES; i++) {
         particles.push(createParticle(world));
@@ -3307,10 +5024,15 @@ async function checkModelStatus() {
         const s = await r.json();
 
         updateModelStatus(s);
+        updateVoiceRuntimeSettingsStatus(s);
 
         // Notify when local model comes online
-        if (s.active_mode === "local" && s.local_ready && currentMode === "local") {
+        if (!s.local_ready) {
+            localModelReadyNoticeShown = false;
+        }
+        if (s.active_mode === "local" && s.local_ready && currentMode === "local" && !localModelReadyNoticeShown) {
             addMessage(t("messages.local_model_ready"), "mood");
+            localModelReadyNoticeShown = true;
         }
     } catch (e) { /* server not up yet */ }
 }
@@ -3358,6 +5080,7 @@ function showEndPageButton() {
 
 window.addEventListener("load", async () => {
     setPreloadStage("settings", 12);
+    applyCursorPreferences({ updateUi: false });
     // Language: localStorage is authoritative for persistence across sessions
     const storedLang = localStorage.getItem("cursed_canvas_lang");
     let initialLang = storedLang || null;
@@ -3398,10 +5121,16 @@ window.addEventListener("load", async () => {
         console.warn("I18N init failed, trying en...", e);
         try { await initI18N("en"); } catch (e2) { /* ignore */ }
     }
+    localStorage.setItem("cursed_canvas_lang", window.I18N && window.I18N.lang ? window.I18N.lang : initialLang);
+    if (settingsData) {
+        settingsData.language = settingsData.language || {};
+        settingsData.language.current = window.I18N && window.I18N.lang ? window.I18N.lang : initialLang;
+    }
     // Apply I18N to HTML immediately after init, before any view rendering
     setPreloadStage("interface", 44);
     if (typeof applyI18N === "function") applyI18N();
     updateTutorialSettingsUi();
+    updateCursorSettingsUi();
     renderTutorialSurfaces();
 
     setPreloadStage("saves", 58);
@@ -3420,7 +5149,12 @@ window.addEventListener("load", async () => {
         }
     } catch (e) { /* ignore */ }
 
-    setPreloadStage("scene", 78);
+    setPreloadStage("local_model", 76);
+    await probeOptionalLocalRuntimeForPreload();
+
+    setPreloadStage("voice_model", 82);
+
+    setPreloadStage("scene", 88);
     if (isReturning) {
         titleScreenDismissed = true;
         if (titleScreen) titleScreen.classList.add("hidden");
@@ -3455,7 +5189,7 @@ window.addEventListener("load", async () => {
     }
 
     // Initialize particles
-    setPreloadStage("effects", 88);
+    setPreloadStage("effects", 94);
     setParticleWorld("museum");
     updateParticles();
 
@@ -3471,6 +5205,16 @@ window.addEventListener("load", async () => {
 window.addEventListener("storage", (e) => {
     if (e.key === TUTORIAL_ENABLED_STORAGE_KEY || e.key === TUTORIAL_SEEN_STORAGE_KEY) {
         updateTutorialSettingsUi();
+    }
+    if (
+        e.key === CURSOR_STYLE_STORAGE_KEY
+        || e.key === CURSOR_TRAIL_STORAGE_KEY
+        || e.key === CURSOR_TIP_GLOW_STORAGE_KEY
+        || e.key === CURSOR_TIP_GLOW_RADIUS_STORAGE_KEY
+        || e.key === CURSOR_CLICK_EFFECT_STORAGE_KEY
+        || e.key === CURSOR_TRAIL_STYLE_STORAGE_KEY
+    ) {
+        applyCursorPreferences();
     }
     if (e.key === "cursed_canvas_lang" && e.newValue && e.newValue !== (window.I18N && window.I18N.lang)) {
         switchLanguage(e.newValue);
@@ -3491,6 +5235,8 @@ window.addEventListener("beforeunload", () => {
         }
     }
     pollActive = false;
+    setCursorTrailActive(false);
+    setCursorClickFeedbackActive(false);
     stopTitleParticles();
     stopStartParticles();
     if (animFrameId) cancelAnimationFrame(animFrameId);

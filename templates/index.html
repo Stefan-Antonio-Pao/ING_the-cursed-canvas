@@ -19,7 +19,7 @@
             document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=preload-screen-20260701">
+    <link rel="stylesheet" href="/static/style.css?v=cursor-gallery-polish-20260703">
 </head>
 <body data-world="museum" class="is-preloading">
     <!-- Background layers -->
@@ -93,15 +93,20 @@
         </article>
 
         <article id="settings-view" class="start-view" aria-label="Settings" tabindex="-1">
+            <div class="settings-topbar">
+                <button class="settings-back-btn" id="settings-back-btn" type="button" data-i18n="settings.back">Back</button>
+                <p class="start-kicker" data-i18n="settings.title">Settings</p>
+            </div>
+            <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+                <button class="settings-tab active" id="settings-tab-display" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-display" data-settings-tab="display" data-i18n="settings.tab_display">Display</button>
+                <button class="settings-tab" id="settings-tab-ai" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-ai" data-settings-tab="ai" data-i18n="settings.tab_ai">AI</button>
+                <button class="settings-tab" id="settings-tab-voice" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-voice" data-settings-tab="voice" data-i18n="settings.tab_voice">Voice</button>
+                <button class="settings-tab" id="settings-tab-cursor" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-cursor" data-settings-tab="cursor" data-i18n="settings.tab_cursor">Cursor</button>
+            </div>
             <div class="settings-flow-stage">
                 <button class="onboarding-arrow settings-flow-arrow" id="settings-flow-prev-btn" type="button" aria-label="Previous setup step">&lsaquo;</button>
                 <div class="settings-card">
-                <div class="settings-topbar">
-                    <button class="settings-back-btn" id="settings-back-btn" type="button" data-i18n="settings.back">Back</button>
-                    <p class="start-kicker" data-i18n="settings.title">Settings</p>
-                </div>
-
-                <section class="settings-section">
+                <section class="settings-section settings-tab-panel active" id="settings-panel-display" role="tabpanel" aria-labelledby="settings-tab-display" data-settings-tab-panel="display">
                     <p class="settings-kicker" data-i18n="settings.display_kicker">Display</p>
                     <div class="settings-section-heading">
                         <h2 data-i18n="settings.language_heading">Language</h2>
@@ -127,7 +132,7 @@
                     </div>
                 </section>
 
-                <section class="settings-section">
+                <section class="settings-section settings-tab-panel" id="settings-panel-ai" role="tabpanel" aria-labelledby="settings-tab-ai" data-settings-tab-panel="ai" hidden>
                     <p class="settings-kicker" data-i18n="settings.ai_kicker">AI Configuration</p>
                     <div class="settings-section-heading">
                         <h2 data-i18n="settings.model_heading">Model</h2>
@@ -194,6 +199,109 @@
                     </div>
                 </section>
 
+                <section class="settings-section settings-tab-panel voice-settings-block" id="settings-panel-voice" role="tabpanel" aria-labelledby="settings-tab-voice" data-settings-tab-panel="voice" hidden>
+                    <p class="settings-kicker" data-i18n="settings.voice_kicker">Voice Input</p>
+                    <div class="settings-section-heading">
+                        <h2 data-i18n="settings.voice_heading">Speech Correction</h2>
+                        <p data-i18n="settings.voice_desc">Refine speech transcripts before placing them in the command box.</p>
+                    </div>
+                    <div class="settings-option-block">
+                        <div class="settings-stepper voice-stepper" role="group" aria-label="Voice correction engine">
+                            <button class="settings-arrow" id="voice-backend-prev-btn" type="button" aria-label="Previous voice correction engine">&lsaquo;</button>
+                            <div class="settings-stepper-value" id="voice-backend-value" aria-live="polite">Automatic</div>
+                            <button class="settings-arrow" id="voice-backend-next-btn" type="button" aria-label="Next voice correction engine">&rsaquo;</button>
+                        </div>
+                        <p class="settings-note" id="voice-backend-note" data-i18n="settings.voice_backend_auto_note">Automatically chooses online or local correction based on the selected AI model.</p>
+                        <div class="settings-model-panel voice-runtime-panel hidden" id="voice-runtime-panel">
+                            <div class="settings-status-row">
+                                <span id="voice-runtime-dot" class="status-dot offline"></span>
+                                <strong id="voice-runtime-status" data-i18n="settings.voice_runtime_checking">Checking</strong>
+                            </div>
+                            <p class="settings-note" id="voice-runtime-detail" data-i18n="settings.voice_runtime_detail">The local voice model is optional and prewarms in the background.</p>
+                        </div>
+                    </div>
+                    <div class="settings-option-block">
+                        <div class="settings-stepper voice-stepper" role="group" aria-label="Voice correction strength">
+                            <button class="settings-arrow" id="voice-correction-prev-btn" type="button" aria-label="Previous correction strength">&lsaquo;</button>
+                            <div class="settings-stepper-value" id="voice-correction-value" aria-live="polite">Balanced</div>
+                            <button class="settings-arrow" id="voice-correction-next-btn" type="button" aria-label="Next correction strength">&rsaquo;</button>
+                        </div>
+                    </div>
+                    <div class="settings-option-block">
+                        <label class="settings-checkbox-row" for="voice-auto-send-checkbox">
+                            <input id="voice-auto-send-checkbox" type="checkbox">
+                            <span data-i18n="settings.voice_auto_send">Send automatically after correction</span>
+                        </label>
+                        <p class="settings-note" id="voice-preference-note" data-i18n="settings.voice_note">Automatic sending stays off by default so you can review the transcript first.</p>
+                    </div>
+                </section>
+
+                <section class="settings-section settings-tab-panel cursor-settings-block" id="settings-panel-cursor" role="tabpanel" aria-labelledby="settings-tab-cursor" data-settings-tab-panel="cursor" hidden>
+                    <p class="settings-kicker" data-i18n="settings.cursor_kicker">Cursor</p>
+                    <div class="settings-section-heading">
+                        <h2 data-i18n="settings.cursor_heading">Cursor Effects</h2>
+                        <p data-i18n="settings.cursor_desc">Match the pointer and glow trail to the active painting theme.</p>
+                    </div>
+                    <div class="cursor-preview-panel" aria-hidden="true">
+                        <span class="cursor-preview-pointer"></span>
+                        <span class="cursor-preview-tip-glow"></span>
+                        <span class="cursor-preview-click-ripple"></span>
+                        <span class="cursor-preview-click-spark spark-one"></span>
+                        <span class="cursor-preview-click-spark spark-two"></span>
+                        <span class="cursor-preview-click-spark spark-three"></span>
+                        <span class="cursor-preview-beam beam-one"></span>
+                        <span class="cursor-preview-beam beam-two"></span>
+                        <span class="cursor-preview-trail trail-one"></span>
+                        <span class="cursor-preview-trail trail-two"></span>
+                        <span class="cursor-preview-trail trail-three"></span>
+                    </div>
+                    <div class="settings-option-block">
+                        <label class="settings-checkbox-row" for="cursor-style-checkbox">
+                            <input id="cursor-style-checkbox" type="checkbox">
+                            <span data-i18n="settings.cursor_style_toggle">Use themed game cursor</span>
+                        </label>
+                        <p class="settings-note" id="cursor-style-note" data-i18n="settings.cursor_style_enabled_note">The cursor uses the active painting colors.</p>
+                    </div>
+                    <div class="settings-option-block">
+                        <label class="settings-checkbox-row" for="cursor-tip-glow-checkbox">
+                            <input id="cursor-tip-glow-checkbox" type="checkbox">
+                            <span data-i18n="settings.cursor_tip_glow_toggle">Glow at cursor tip</span>
+                        </label>
+                        <p class="settings-note" id="cursor-tip-glow-note" data-i18n="settings.cursor_tip_glow_enabled_note">The pointer tip has a subtle theme-colored glow.</p>
+                        <div class="settings-dependent-control cursor-tip-glow-radius-control" id="cursor-tip-glow-radius-control">
+                            <p class="settings-label" data-i18n="settings.cursor_tip_glow_radius_label">Glow Radius</p>
+                            <div class="settings-stepper cursor-tip-glow-stepper" role="group" aria-label="Cursor tip glow radius">
+                                <button class="settings-arrow" id="cursor-tip-glow-radius-prev-btn" type="button" aria-label="Previous cursor tip glow radius">&lsaquo;</button>
+                                <div class="settings-stepper-value" id="cursor-tip-glow-radius-value" aria-live="polite">Medium</div>
+                                <button class="settings-arrow" id="cursor-tip-glow-radius-next-btn" type="button" aria-label="Next cursor tip glow radius">&rsaquo;</button>
+                            </div>
+                            <p class="settings-note" id="cursor-tip-glow-radius-note" data-i18n="settings.cursor_tip_glow_radius_medium_note">A balanced glow around the cursor tip.</p>
+                        </div>
+                    </div>
+                    <div class="settings-option-block">
+                        <label class="settings-checkbox-row" for="cursor-click-effect-checkbox">
+                            <input id="cursor-click-effect-checkbox" type="checkbox">
+                            <span data-i18n="settings.cursor_click_effect_toggle">Click ripple feedback</span>
+                        </label>
+                        <p class="settings-note" id="cursor-click-effect-note" data-i18n="settings.cursor_click_effect_enabled_note">Clicks create a soft ripple and a few small sparks.</p>
+                    </div>
+                    <div class="settings-option-block">
+                        <label class="settings-checkbox-row" for="cursor-trail-checkbox">
+                            <input id="cursor-trail-checkbox" type="checkbox">
+                            <span data-i18n="settings.cursor_trail_toggle">Use themed glow trail</span>
+                        </label>
+                        <p class="settings-note" id="cursor-trail-note" data-i18n="settings.cursor_trail_enabled_note">Moving the mouse leaves a short theme-colored glow.</p>
+                    </div>
+                    <div class="settings-option-block settings-dependent-control" id="cursor-trail-style-control">
+                        <p class="settings-label" data-i18n="settings.cursor_trail_style_label">Trail Style</p>
+                        <div class="settings-stepper cursor-trail-stepper" role="group" aria-label="Cursor trail style">
+                            <button class="settings-arrow" id="cursor-trail-style-prev-btn" type="button" aria-label="Previous cursor trail style">&lsaquo;</button>
+                            <div class="settings-stepper-value" id="cursor-trail-style-value" aria-live="polite">Chasing Light</div>
+                            <button class="settings-arrow" id="cursor-trail-style-next-btn" type="button" aria-label="Next cursor trail style">&rsaquo;</button>
+                        </div>
+                    </div>
+                </section>
+
                 <p id="settings-status" aria-live="polite"></p>
                 </div>
                 <button class="onboarding-arrow settings-flow-arrow" id="settings-flow-next-btn" type="button" aria-label="Next setup step">&rsaquo;</button>
@@ -242,8 +350,18 @@
                 <form id="command-form" autocomplete="off">
                     <input type="text" id="command-input"
                            placeholder="(...) for actions, or just type to talk" maxlength="300" autofocus data-i18n-placeholder="game.input_placeholder">
+                    <button type="button" id="voice-btn" class="voice-btn" aria-label="Voice input" title="Voice input">
+                        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                            <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
+                            <path d="M19 10v1a7 7 0 0 1-14 0v-1"></path>
+                            <path d="M12 18v3"></path>
+                            <path d="M8 21h8"></path>
+                        </svg>
+                    </button>
                     <button type="submit" id="send-btn" data-i18n="game.send">Send</button>
                 </form>
+                <p id="voice-status" class="voice-status hint" aria-live="polite" data-i18n="messages.voice_hint">Click the microphone button to the right of the input box to try voice input.</p>
+                <p id="voice-disclaimer" class="voice-disclaimer" data-i18n="messages.voice_disclaimer">Voice input is experimental and may be inaccurate in this version. You can choose stronger correction in Settings to improve results.</p>
                 <div id="quick-actions">
                     <button class="quick-btn" data-cmd="__open_inventory__" data-action="open-inventory">Inventory</button>
                     <button class="quick-btn" data-cmd="__open_tutorial__" data-action="open-tutorial">Help</button>
@@ -302,9 +420,20 @@
             <!-- Model status card -->
             <div class="info-card" id="model-card">
                 <h3 data-i18n="side_panel.ai_model">AI Model</h3>
-                <p id="model-status-text">
-                    <span class="status-dot online"></span> DeepSeek API &mdash; Ready
-                </p>
+                <div id="model-status-list" class="model-status-list">
+                    <p class="model-status-row" id="api-model-status-text">
+                        <span class="status-dot online"></span>
+                        <span>DeepSeek API &mdash; Ready</span>
+                    </p>
+                    <p class="model-status-row" id="local-chat-model-status-text">
+                        <span class="status-dot offline"></span>
+                        <span>Local Model (Chat) &mdash; Unavailable</span>
+                    </p>
+                    <p class="model-status-row" id="local-voice-model-status-text">
+                        <span class="status-dot offline"></span>
+                        <span>Local Model (Voice) &mdash; Unavailable</span>
+                    </p>
+                </div>
             </div>
 
             <!-- Session card -->
@@ -440,6 +569,6 @@ function applyI18N() {
     });
 }
 </script>
-    <script src="/static/game.js?v=preload-screen-20260701"></script>
+    <script src="/static/game.js?v=cursor-gallery-polish-20260703"></script>
 </body>
 </html>
