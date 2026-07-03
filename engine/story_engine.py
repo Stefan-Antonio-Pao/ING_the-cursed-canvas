@@ -319,6 +319,7 @@ class GameState:
                   "havre":"impression_sunrise","misty":"impression_sunrise",
                   "印象":"impression_sunrise","印象日出":"impression_sunrise",
                   "印象·日出":"impression_sunrise","日出":"impression_sunrise",
+                  "日出·印象":"impression_sunrise","日出印象":"impression_sunrise",
                   "莫奈":"impression_sunrise","莫内":"impression_sunrise",
                   "港口":"impression_sunrise","勒阿弗尔":"impression_sunrise","雾":"impression_sunrise"}
         for ex in world.get("exits", []):

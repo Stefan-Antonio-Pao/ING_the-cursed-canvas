@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title id="page-title">The Cursed Canvas</title>
+    <link rel="icon" type="image/png" id="game-favicon" href="/static/icons/skeuomorphic.png?v=icon-gallery-20260703-four-icons">
+    <link rel="apple-touch-icon" id="game-apple-touch-icon" href="/static/icons/skeuomorphic.png?v=icon-gallery-20260703-four-icons">
     <script>
         (function () {
             var lang = "{{ initial_lang|default('en') }}";
@@ -19,7 +21,7 @@
             document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=cursor-gallery-polish-20260703">
+    <link rel="stylesheet" href="/static/style.css?v=icon-gallery-20260703">
 </head>
 <body data-world="museum" class="is-preloading">
     <!-- Background layers -->
@@ -75,6 +77,7 @@
                 <button class="start-btn" id="continue-game-btn" type="button" data-i18n="start.continue">Continue</button>
                 <button class="start-btn" id="gallery-btn" type="button" data-i18n="start.gallery">Gallery</button>
                 <button class="start-btn" id="settings-btn" type="button" data-i18n="start.settings">Settings</button>
+                <button class="start-btn danger" id="exit-game-menu-btn" type="button" data-i18n="start.exit_game">Exit Game</button>
             </nav>
             <p id="start-status" aria-live="polite"></p>
         </div>
@@ -102,6 +105,7 @@
                 <button class="settings-tab" id="settings-tab-ai" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-ai" data-settings-tab="ai" data-i18n="settings.tab_ai">AI</button>
                 <button class="settings-tab" id="settings-tab-voice" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-voice" data-settings-tab="voice" data-i18n="settings.tab_voice">Voice</button>
                 <button class="settings-tab" id="settings-tab-cursor" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-cursor" data-settings-tab="cursor" data-i18n="settings.tab_cursor">Cursor</button>
+                <button class="settings-tab" id="settings-tab-icon" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-icon" data-settings-tab="icon" data-i18n="settings.tab_icon">Game Icon</button>
             </div>
             <div class="settings-flow-stage">
                 <button class="onboarding-arrow settings-flow-arrow" id="settings-flow-prev-btn" type="button" aria-label="Previous setup step">&lsaquo;</button>
@@ -272,10 +276,10 @@
                             <p class="settings-label" data-i18n="settings.cursor_tip_glow_radius_label">Glow Radius</p>
                             <div class="settings-stepper cursor-tip-glow-stepper" role="group" aria-label="Cursor tip glow radius">
                                 <button class="settings-arrow" id="cursor-tip-glow-radius-prev-btn" type="button" aria-label="Previous cursor tip glow radius">&lsaquo;</button>
-                                <div class="settings-stepper-value" id="cursor-tip-glow-radius-value" aria-live="polite">Medium</div>
+                                <div class="settings-stepper-value" id="cursor-tip-glow-radius-value" aria-live="polite">Large</div>
                                 <button class="settings-arrow" id="cursor-tip-glow-radius-next-btn" type="button" aria-label="Next cursor tip glow radius">&rsaquo;</button>
                             </div>
-                            <p class="settings-note" id="cursor-tip-glow-radius-note" data-i18n="settings.cursor_tip_glow_radius_medium_note">A balanced glow around the cursor tip.</p>
+                            <p class="settings-note" id="cursor-tip-glow-radius-note" data-i18n="settings.cursor_tip_glow_radius_large_note">A wider glow that makes the cursor easier to track.</p>
                         </div>
                     </div>
                     <div class="settings-option-block">
@@ -284,6 +288,15 @@
                             <span data-i18n="settings.cursor_click_effect_toggle">Click ripple feedback</span>
                         </label>
                         <p class="settings-note" id="cursor-click-effect-note" data-i18n="settings.cursor_click_effect_enabled_note">Clicks create a soft ripple and a few small sparks.</p>
+                        <div class="settings-dependent-control cursor-click-effect-radius-control" id="cursor-click-effect-radius-control">
+                            <p class="settings-label" data-i18n="settings.cursor_click_effect_radius_label">Ripple Range</p>
+                            <div class="settings-stepper cursor-click-effect-stepper" role="group" aria-label="Cursor click ripple range">
+                                <button class="settings-arrow" id="cursor-click-effect-radius-prev-btn" type="button" aria-label="Previous cursor click ripple range">&lsaquo;</button>
+                                <div class="settings-stepper-value" id="cursor-click-effect-radius-value" aria-live="polite">Large</div>
+                                <button class="settings-arrow" id="cursor-click-effect-radius-next-btn" type="button" aria-label="Next cursor click ripple range">&rsaquo;</button>
+                            </div>
+                            <p class="settings-note" id="cursor-click-effect-radius-note" data-i18n="settings.cursor_click_effect_radius_large_note">A wider ripple with broader sparks for clearer feedback.</p>
+                        </div>
                     </div>
                     <div class="settings-option-block">
                         <label class="settings-checkbox-row" for="cursor-trail-checkbox">
@@ -296,10 +309,20 @@
                         <p class="settings-label" data-i18n="settings.cursor_trail_style_label">Trail Style</p>
                         <div class="settings-stepper cursor-trail-stepper" role="group" aria-label="Cursor trail style">
                             <button class="settings-arrow" id="cursor-trail-style-prev-btn" type="button" aria-label="Previous cursor trail style">&lsaquo;</button>
-                            <div class="settings-stepper-value" id="cursor-trail-style-value" aria-live="polite">Chasing Light</div>
+                            <div class="settings-stepper-value" id="cursor-trail-style-value" aria-live="polite">Starlight Sparks</div>
                             <button class="settings-arrow" id="cursor-trail-style-next-btn" type="button" aria-label="Next cursor trail style">&rsaquo;</button>
                         </div>
                     </div>
+                </section>
+
+                <section class="settings-section settings-tab-panel icon-settings-block" id="settings-panel-icon" role="tabpanel" aria-labelledby="settings-tab-icon" data-settings-tab-panel="icon" hidden>
+                    <p class="settings-kicker" data-i18n="settings.icon_kicker">Game Icon</p>
+                    <div class="settings-section-heading">
+                        <h2 data-i18n="settings.icon_heading">Game Icons</h2>
+                        <p data-i18n="settings.icon_desc">Choose the icon shown in the browser tab and home screen. More icons will arrive in future updates.</p>
+                    </div>
+                    <div class="icon-gallery-grid" id="icon-gallery-grid" aria-live="polite"></div>
+                    <p class="settings-note" id="icon-apply-status" data-i18n="settings.icon_apply_hint">Select an icon to apply it immediately. Your choice is remembered on this device.</p>
                 </section>
 
                 <p id="settings-status" aria-live="polite"></p>
@@ -569,6 +592,6 @@ function applyI18N() {
     });
 }
 </script>
-    <script src="/static/game.js?v=cursor-gallery-polish-20260703"></script>
+    <script src="/static/game.js?v=icon-gallery-20260703-four-icons"></script>
 </body>
 </html>

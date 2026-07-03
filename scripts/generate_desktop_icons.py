@@ -201,17 +201,43 @@ def _make_ico() -> None:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate desktop icon assets for The Cursed Canvas.")
+    parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Path to a source PNG to use instead of the procedurally drawn icon. "
+             "When provided, icon.png is resized from this source (1024x1024).",
+    )
+    args = parser.parse_args()
+
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     legacy_iconset = ASSET_DIR / "icon.iconset"
     if legacy_iconset.exists():
         shutil.rmtree(legacy_iconset)
-    _make_icon_png()
+
+    if args.source:
+        source_path = Path(args.source)
+        if not source_path.exists():
+            raise SystemExit(f"Source icon not found: {source_path}")
+        ICON_PNG.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["sips", "-z", "1024", "1024", str(source_path), "--out", str(ICON_PNG)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        print(f"Generated {os.fspath(ICON_PNG)} from source {source_path}")
+    else:
+        _make_icon_png()
+        print(f"Generated {os.fspath(ICON_PNG)}")
+
     if shutil.which("sips"):
         _make_icns()
         _make_ico()
     else:
         raise SystemExit("sips is required to generate desktop icons on macOS.")
-    print(f"Generated {os.fspath(ICON_PNG)}")
     print(f"Generated {os.fspath(ICON_ICNS)}")
     print(f"Generated {os.fspath(ICON_ICO)}")
 

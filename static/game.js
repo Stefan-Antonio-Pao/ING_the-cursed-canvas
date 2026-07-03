@@ -16,6 +16,10 @@ const TITLE_PARTICLE_THEME_COLORS = [
 
 // ── I18N ──
 window.I18N = null;
+const PRELOAD_STARTED_AT = performance.now();
+const PRELOAD_MIN_VISIBLE_MS = 2600;
+const PRELOAD_READY_HOLD_MS = 650;
+const PRELOAD_OVERLAY_FADE_MS = 860;
 
 async function initI18N(targetLang) {
     const resp = await fetch(`/api/i18n/${targetLang}`, { cache: "no-store" });
@@ -86,8 +90,14 @@ function setPreloadStage(key, progress) {
     if (bar) bar.style.width = `${Math.max(0, Math.min(100, Math.round(progress)))}%`;
 }
 
+function isPreloadingActive() {
+    return document.body.classList.contains("is-preloading");
+}
+
 function finishPreloadOverlay() {
     setPreloadStage("ready", 100);
+    const remainingVisibleMs = Math.max(0, PRELOAD_MIN_VISIBLE_MS - (performance.now() - PRELOAD_STARTED_AT));
+    const finishDelayMs = remainingVisibleMs + PRELOAD_READY_HOLD_MS;
     window.setTimeout(() => {
         document.body.classList.add("preload-complete");
         if (!titleScreenDismissed) {
@@ -100,14 +110,16 @@ function finishPreloadOverlay() {
             window.setTimeout(() => {
                 if (loadingOverlay.parentNode) loadingOverlay.remove();
                 document.body.classList.remove("is-preloading", "preload-complete");
-            }, 760);
+                applyCursorPreferences({ updateUi: false });
+            }, PRELOAD_OVERLAY_FADE_MS);
         } else {
             document.body.classList.remove("is-preloading", "preload-complete");
+            applyCursorPreferences({ updateUi: false });
         }
         if (titleContinue && window.I18N && window.I18N.title_screen) {
             titleContinue.textContent = window.I18N.title_screen.continue_prompt;
         }
-    }, 260);
+    }, finishDelayMs);
 }
 
 async function probeOptionalLocalRuntimeForPreload(timeoutMs = 2000) {
@@ -218,6 +230,7 @@ function refreshAllUI(sidePanelData) {
     setLanguageDisplay();
     updateTutorialSettingsUi();
     updateCursorSettingsUi();
+    renderIconGallery();
     renderTutorialSurfaces();
     updateQuickActions(currentWorld);
     updateSidePanel(sidePanelData || null);
@@ -273,6 +286,7 @@ const newAdventureBtn = document.getElementById("new-adventure-btn");
 const continueGameBtn = document.getElementById("continue-game-btn");
 const galleryBtn = document.getElementById("gallery-btn");
 const settingsBtn = document.getElementById("settings-btn");
+const exitGameMenuBtn = document.getElementById("exit-game-menu-btn");
 const galleryView = document.getElementById("gallery-view");
 const galleryBackBtn = document.getElementById("gallery-back-btn");
 const galleryPage = document.getElementById("gallery-page");
@@ -322,10 +336,17 @@ const cursorTipGlowRadiusPrevBtn = document.getElementById("cursor-tip-glow-radi
 const cursorTipGlowRadiusNextBtn = document.getElementById("cursor-tip-glow-radius-next-btn");
 const cursorTipGlowRadiusValue = document.getElementById("cursor-tip-glow-radius-value");
 const cursorTipGlowRadiusNote = document.getElementById("cursor-tip-glow-radius-note");
+const cursorClickEffectRadiusControl = document.getElementById("cursor-click-effect-radius-control");
+const cursorClickEffectRadiusPrevBtn = document.getElementById("cursor-click-effect-radius-prev-btn");
+const cursorClickEffectRadiusNextBtn = document.getElementById("cursor-click-effect-radius-next-btn");
+const cursorClickEffectRadiusValue = document.getElementById("cursor-click-effect-radius-value");
+const cursorClickEffectRadiusNote = document.getElementById("cursor-click-effect-radius-note");
 const cursorTrailStyleControl = document.getElementById("cursor-trail-style-control");
 const cursorTrailStylePrevBtn = document.getElementById("cursor-trail-style-prev-btn");
 const cursorTrailStyleNextBtn = document.getElementById("cursor-trail-style-next-btn");
 const cursorTrailStyleValue = document.getElementById("cursor-trail-style-value");
+const iconGalleryGrid = document.getElementById("icon-gallery-grid");
+const iconApplyStatus = document.getElementById("icon-apply-status");
 const deepseekSettingsPanel = document.getElementById("deepseek-settings-panel");
 const localModelSettingsPanel = document.getElementById("local-model-settings-panel");
 const experienceTokenPercent = document.getElementById("experience-token-percent");
@@ -437,6 +458,9 @@ let inventoryTimeline = [];
 let inventoryDetails = [];
 let dynamicWorldOrder = [];
 let cursorTrailLayer = null;
+let cursorTrailCanvas = null;
+let cursorTrailCanvasContext = null;
+let cursorTrailFrameId = null;
 let cursorTrailEnabled = false;
 let cursorTrailListenerAttached = false;
 let cursorTrailPalette = [];
@@ -444,9 +468,7 @@ let cursorTrailDots = [];
 let cursorTrailLastX = 0;
 let cursorTrailLastY = 0;
 let cursorTrailLastTime = 0;
-let cursorTrailLastDeltaX = 0;
-let cursorTrailLastDeltaY = 0;
-let cursorTrailPointHistory = [];
+let cursorTrailLaserPoints = [];
 let cursorClickFeedbackEnabled = false;
 let cursorClickListenerAttached = false;
 let cursorClickElements = [];
@@ -546,9 +568,17 @@ const CURSOR_TRAIL_STORAGE_KEY = "theCursedCanvas.cursorTrailEnabled.v1";
 const CURSOR_TIP_GLOW_STORAGE_KEY = "theCursedCanvas.cursorTipGlowEnabled.v1";
 const CURSOR_TIP_GLOW_RADIUS_STORAGE_KEY = "theCursedCanvas.cursorTipGlowRadius.v1";
 const CURSOR_CLICK_EFFECT_STORAGE_KEY = "theCursedCanvas.cursorClickEffectEnabled.v1";
+const CURSOR_CLICK_EFFECT_RADIUS_STORAGE_KEY = "theCursedCanvas.cursorClickEffectRadius.v1";
 const CURSOR_TRAIL_STYLE_STORAGE_KEY = "theCursedCanvas.cursorTrailStyle.v1";
-const CURSOR_TRAIL_MAX_DOTS = 36;
+const GAME_ICON_STORAGE_KEY = "theCursedCanvas.gameIcon.v1";
+const CURSOR_TRAIL_MAX_DOTS = 44;
 const CURSOR_CLICK_MAX_ELEMENTS = 30;
+const CURSOR_TRAIL_LASER_POINT_LIMIT = 26;
+const CURSOR_TRAIL_LASER_MAX_AGE_MS = 245;
+const CURSOR_TRAIL_LASER_MAX_LENGTH = 200;
+const CURSOR_TRAIL_LASER_MIN_DISTANCE = 1.3;
+const CURSOR_TRAIL_LASER_INSERT_DISTANCE = 9;
+const CURSOR_TRAIL_LASER_MAX_BATCH_SAMPLES = 10;
 const CURSOR_TIP_GLOW_RADIUS_OPTIONS = [
     { value: "small", labelKey: "settings.cursor_tip_glow_radius_small", noteKey: "settings.cursor_tip_glow_radius_small_note", radius: 4.6, blur: 1.7, opacity: 0.34 },
     { value: "medium", labelKey: "settings.cursor_tip_glow_radius_medium", noteKey: "settings.cursor_tip_glow_radius_medium_note", radius: 6.7, blur: 2.25, opacity: 0.4 },
@@ -557,6 +587,11 @@ const CURSOR_TIP_GLOW_RADIUS_OPTIONS = [
 const CURSOR_TRAIL_STYLE_OPTIONS = [
     { value: "laser", labelKey: "settings.cursor_trail_style_laser", noteKey: "settings.cursor_trail_laser_note" },
     { value: "stardust", labelKey: "settings.cursor_trail_style_stardust", noteKey: "settings.cursor_trail_stardust_note" },
+];
+const CURSOR_CLICK_EFFECT_RADIUS_OPTIONS = [
+    { value: "small", labelKey: "settings.cursor_click_effect_radius_small", noteKey: "settings.cursor_click_effect_radius_small_note", baseSize: 10, scaleFrom: 0.5, scaleTo: 2.2, sparkScale: 0.78 },
+    { value: "medium", labelKey: "settings.cursor_click_effect_radius_medium", noteKey: "settings.cursor_click_effect_radius_medium_note", baseSize: 13, scaleFrom: 0.55, scaleTo: 2.75, sparkScale: 1 },
+    { value: "large", labelKey: "settings.cursor_click_effect_radius_large", noteKey: "settings.cursor_click_effect_radius_large_note", baseSize: 16, scaleFrom: 0.6, scaleTo: 3.3, sparkScale: 1.28 },
 ];
 
 // ── Title screen flow ──
@@ -1002,7 +1037,7 @@ function measureSettingsCardHeightForPanel(panel, options = {}) {
     }
     const hiddenDependentElements = [];
     if (panel && panel.dataset.settingsTabPanel === "cursor") {
-        hiddenDependentElements.push(cursorTipGlowRadiusControl, cursorTrailStyleControl);
+        hiddenDependentElements.push(cursorTipGlowRadiusControl, cursorClickEffectRadiusControl, cursorTrailStyleControl);
     }
     const previousHiddenDependentStates = hiddenDependentElements.filter(Boolean).map((item) => ({
         item,
@@ -1220,13 +1255,13 @@ function getCursorTipGlowRadiusPreference() {
     const storedPreference = readStoredString(CURSOR_TIP_GLOW_RADIUS_STORAGE_KEY);
     return CURSOR_TIP_GLOW_RADIUS_OPTIONS.some((option) => option.value === storedPreference)
         ? storedPreference
-        : "medium";
+        : "large";
 }
 
 function getCursorTipGlowRadiusIndex(radius) {
     const current = radius || getCursorTipGlowRadiusPreference();
     const index = CURSOR_TIP_GLOW_RADIUS_OPTIONS.findIndex((option) => option.value === current);
-    return index >= 0 ? index : 1;
+    return index >= 0 ? index : 2;
 }
 
 function getCursorClickEffectPreference() {
@@ -1234,17 +1269,201 @@ function getCursorClickEffectPreference() {
     return storedPreference !== false;
 }
 
+function getCursorClickEffectRadiusPreference() {
+    const storedPreference = readStoredString(CURSOR_CLICK_EFFECT_RADIUS_STORAGE_KEY);
+    return CURSOR_CLICK_EFFECT_RADIUS_OPTIONS.some((option) => option.value === storedPreference)
+        ? storedPreference
+        : "large";
+}
+
+function getCursorClickEffectRadiusIndex(radius) {
+    const current = radius || getCursorClickEffectRadiusPreference();
+    const index = CURSOR_CLICK_EFFECT_RADIUS_OPTIONS.findIndex((option) => option.value === current);
+    return index >= 0 ? index : 2;
+}
+
+function getCursorClickEffectRadiusOption(radius) {
+    return CURSOR_CLICK_EFFECT_RADIUS_OPTIONS[getCursorClickEffectRadiusIndex(radius)];
+}
+
 function getCursorTrailStylePreference() {
     const storedPreference = readStoredString(CURSOR_TRAIL_STYLE_STORAGE_KEY);
     return CURSOR_TRAIL_STYLE_OPTIONS.some((option) => option.value === storedPreference)
         ? storedPreference
-        : "laser";
+        : "stardust";
 }
 
 function getCursorTrailStyleIndex(style) {
     const current = style || getCursorTrailStylePreference();
     const index = CURSOR_TRAIL_STYLE_OPTIONS.findIndex((option) => option.value === current);
-    return index >= 0 ? index : 0;
+    return index >= 0 ? index : 1;
+}
+
+const GAME_ICON_CACHE_VERSION = "icon-gallery-20260703-four-icons";
+const GAME_ICON_OPTIONS = [
+    { value: "skeuomorphic", src: "/static/icons/skeuomorphic.png", nameKey: "settings.icon_name_skeuomorphic", descKey: "settings.icon_desc_skeuomorphic" },
+    { value: "flattened", src: "/static/icons/flattened.png", nameKey: "settings.icon_name_flattened", descKey: "settings.icon_desc_flattened" },
+    { value: "concept", src: "/static/icons/concept.png", nameKey: "settings.icon_name_concept", descKey: "settings.icon_desc_concept" },
+    { value: "clean", src: "/static/icons/clean.png", nameKey: "settings.icon_name_clean", descKey: "settings.icon_desc_clean" },
+];
+const GAME_ICON_DEFAULT = "skeuomorphic";
+
+function getGameIconOption(iconId) {
+    return GAME_ICON_OPTIONS.find((option) => option.value === iconId) || GAME_ICON_OPTIONS[0];
+}
+
+function getGameIconPreference() {
+    const storedPreference = readStoredString(GAME_ICON_STORAGE_KEY);
+    return GAME_ICON_OPTIONS.some((option) => option.value === storedPreference)
+        ? storedPreference
+        : GAME_ICON_DEFAULT;
+}
+
+function getGameIconHref(option, options = {}) {
+    const url = new URL(option.src, window.location.origin);
+    url.searchParams.set("v", GAME_ICON_CACHE_VERSION);
+    if (options.refresh) url.searchParams.set("selected", String(Date.now()));
+    return `${url.pathname}${url.search}`;
+}
+
+function upsertGameIconLink(id, rel, href, options = {}) {
+    let link = document.getElementById(id);
+    if (!link) {
+        link = document.createElement("link");
+        link.id = id;
+        link.rel = rel;
+        document.head.appendChild(link);
+    }
+    link.rel = rel;
+    if (options.type) link.type = options.type;
+    if (options.replace) {
+        const replacement = link.cloneNode(false);
+        replacement.href = href;
+        link.replaceWith(replacement);
+        return;
+    }
+    link.href = href;
+}
+
+function applyGameIcon(iconId, options = {}) {
+    const option = getGameIconOption(iconId);
+    const href = getGameIconHref(option, { refresh: !options.silent });
+    upsertGameIconLink("game-favicon", "icon", href, { type: "image/png", replace: true });
+    upsertGameIconLink("game-apple-touch-icon", "apple-touch-icon", href);
+    if (window.cursedCanvasDesktop && typeof window.cursedCanvasDesktop.setWindowIcon === "function") {
+        window.cursedCanvasDesktop.setWindowIcon(href).catch(() => {});
+    }
+    if (options.silent) return;
+    if (window.I18N && window.I18N.settings && window.I18N.settings.icon_applied && iconApplyStatus) {
+        iconApplyStatus.textContent = window.I18N.settings.icon_applied;
+        window.clearTimeout(applyGameIcon.statusTimer);
+        applyGameIcon.statusTimer = window.setTimeout(() => {
+            const hint = window.I18N && window.I18N.settings && window.I18N.settings.icon_apply_hint;
+            if (hint && iconApplyStatus) iconApplyStatus.textContent = hint;
+        }, 2600);
+    }
+}
+
+async function exitGameFromMainMenu() {
+    if (window.cursedCanvasDesktop && typeof window.cursedCanvasDesktop.quitApp === "function") {
+        try {
+            await window.cursedCanvasDesktop.quitApp();
+            return;
+        } catch (err) {
+            console.warn("Desktop quit request failed:", err);
+        }
+    }
+    showStartStatus(t("start.exit_game_closing"));
+    try {
+        const resp = await fetch("/api/quit", {
+            method: "POST",
+            cache: "no-store",
+        });
+        if (!resp.ok) throw new Error("Local quit request failed");
+        window.setTimeout(() => {
+            window.close();
+            showStartStatus(t("start.exit_game_server_stopped"));
+        }, 260);
+    } catch (err) {
+        console.warn("Local quit request failed:", err);
+        showStartStatus(t("start.exit_game_unavailable"));
+    }
+}
+
+function renderIconGallery() {
+    if (!iconGalleryGrid) return;
+    const activeIcon = getGameIconPreference();
+    iconGalleryGrid.innerHTML = "";
+    GAME_ICON_OPTIONS.forEach((option) => {
+        const isActive = option.value === activeIcon;
+        const i18n = window.I18N && window.I18N.settings ? window.I18N.settings : {};
+        const name = i18n[option.nameKey.split(".").slice(1).join(".")] || option.value;
+        const desc = i18n[option.descKey.split(".").slice(1).join(".")] || "";
+        const statusLabel = isActive
+            ? (i18n.icon_in_use || "In Use")
+            : (i18n.icon_apply || "Apply this icon");
+
+        const card = document.createElement("div");
+        card.className = "icon-card" + (isActive ? " is-active" : "");
+        card.setAttribute("data-icon-id", option.value);
+        if (isActive) {
+            card.setAttribute("aria-current", "true");
+        } else {
+            card.setAttribute("data-apply-icon", option.value);
+            card.setAttribute("role", "button");
+            card.tabIndex = 0;
+            card.setAttribute("aria-label", statusLabel);
+        }
+
+        const preview = document.createElement("div");
+        preview.className = "icon-card-preview";
+        const img = document.createElement("img");
+        img.className = "icon-card-image";
+        img.src = getGameIconHref(option);
+        img.alt = name;
+        img.loading = "lazy";
+        img.draggable = false;
+        preview.appendChild(img);
+
+        const body = document.createElement("div");
+        body.className = "icon-card-body";
+        const nameEl = document.createElement("p");
+        nameEl.className = "icon-card-name";
+        nameEl.textContent = name;
+        const descEl = document.createElement("p");
+        descEl.className = "icon-card-desc";
+        descEl.textContent = desc;
+        const status = document.createElement("button");
+        status.type = "button";
+        status.className = "icon-card-status" + (isActive ? " is-in-use" : " is-applyable");
+        status.textContent = statusLabel;
+        if (isActive) {
+            status.disabled = true;
+            status.setAttribute("aria-disabled", "true");
+        } else {
+            status.setAttribute("data-apply-icon", option.value);
+            status.setAttribute("aria-label", i18n.icon_apply || "Apply this icon");
+        }
+
+        body.appendChild(nameEl);
+        body.appendChild(descEl);
+        body.appendChild(status);
+        card.appendChild(preview);
+        card.appendChild(body);
+        iconGalleryGrid.appendChild(card);
+    });
+}
+
+function setGameIconPreference(iconId) {
+    const option = getGameIconOption(iconId);
+    writeStoredString(GAME_ICON_STORAGE_KEY, option.value);
+    applyGameIcon(option.value);
+    renderIconGallery();
+    scheduleSettingsPanelHeightSync();
+}
+
+function initGameIconPreference() {
+    applyGameIcon(getGameIconPreference(), { silent: true });
 }
 
 function getCursorThemePalette(worldId) {
@@ -1316,6 +1535,46 @@ function ensureCursorTrailLayer() {
     return cursorTrailLayer;
 }
 
+function resizeCursorTrailCanvas() {
+    if (!cursorTrailCanvas || !cursorTrailCanvasContext) return;
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.max(1, window.innerWidth);
+    const height = Math.max(1, window.innerHeight);
+    const targetWidth = Math.round(width * pixelRatio);
+    const targetHeight = Math.round(height * pixelRatio);
+    if (cursorTrailCanvas.width !== targetWidth || cursorTrailCanvas.height !== targetHeight) {
+        cursorTrailCanvas.width = targetWidth;
+        cursorTrailCanvas.height = targetHeight;
+    }
+    cursorTrailCanvasContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+}
+
+function ensureCursorTrailCanvas() {
+    const layer = ensureCursorTrailLayer();
+    if (cursorTrailCanvas && cursorTrailCanvas.parentNode) {
+        resizeCursorTrailCanvas();
+        return cursorTrailCanvas;
+    }
+    cursorTrailCanvas = document.createElement("canvas");
+    cursorTrailCanvas.className = "cursor-trail-canvas";
+    cursorTrailCanvas.setAttribute("aria-hidden", "true");
+    layer.insertBefore(cursorTrailCanvas, layer.firstChild);
+    cursorTrailCanvasContext = cursorTrailCanvas.getContext("2d");
+    resizeCursorTrailCanvas();
+    return cursorTrailCanvas;
+}
+
+function clearCursorTrailCanvas() {
+    if (cursorTrailFrameId) {
+        window.cancelAnimationFrame(cursorTrailFrameId);
+        cursorTrailFrameId = null;
+    }
+    cursorTrailLaserPoints = [];
+    if (!cursorTrailCanvasContext) return;
+    resizeCursorTrailCanvas();
+    cursorTrailCanvasContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+}
+
 function removeCursorTrailDot(dot) {
     if (!dot) return;
     cursorTrailDots = cursorTrailDots.filter((item) => item !== dot);
@@ -1328,9 +1587,7 @@ function clearCursorTrailDots() {
     });
     cursorTrailDots = [];
     cursorTrailLastTime = 0;
-    cursorTrailLastDeltaX = 0;
-    cursorTrailLastDeltaY = 0;
-    cursorTrailPointHistory = [];
+    clearCursorTrailCanvas();
 }
 
 function removeCursorClickElement(element) {
@@ -1371,107 +1628,153 @@ function spawnCursorTrailDot(x, y, distance, now) {
     }
 }
 
-function pushCursorTrailPoint(x, y, now) {
-    const lastPoint = cursorTrailPointHistory[cursorTrailPointHistory.length - 1];
-    if (lastPoint && Math.hypot(x - lastPoint.x, y - lastPoint.y) < 0.5) {
-        lastPoint.t = now;
+function cursorTrailRgba(color, alpha) {
+    const rgb = color || [212, 168, 67];
+    return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+}
+
+function mixCursorTrailColor(fromColor, toColor, amount) {
+    const mix = Math.max(0, Math.min(1, amount));
+    const from = fromColor || [212, 168, 67];
+    const to = toColor || [74, 139, 194];
+    return [
+        Math.round(from[0] + (to[0] - from[0]) * mix),
+        Math.round(from[1] + (to[1] - from[1]) * mix),
+        Math.round(from[2] + (to[2] - from[2]) * mix),
+    ];
+}
+
+function trimCursorLaserPoints(now) {
+    let traveled = 0;
+    const trimmed = [];
+    for (let i = 0; i < cursorTrailLaserPoints.length; i++) {
+        const point = cursorTrailLaserPoints[i];
+        if (now - point.t > CURSOR_TRAIL_LASER_MAX_AGE_MS) break;
+        if (i > 0) {
+            const previous = cursorTrailLaserPoints[i - 1];
+            traveled += Math.hypot(point.x - previous.x, point.y - previous.y);
+            if (traveled > CURSOR_TRAIL_LASER_MAX_LENGTH) break;
+        }
+        trimmed.push(point);
+        if (trimmed.length >= CURSOR_TRAIL_LASER_POINT_LIMIT) break;
+    }
+    cursorTrailLaserPoints = trimmed;
+}
+
+function pushCursorLaserPoint(x, y, now) {
+    const head = cursorTrailLaserPoints[0];
+    if (!head) {
+        cursorTrailLaserPoints = [{ x, y, t: now }];
         return;
     }
-    cursorTrailPointHistory.push({ x, y, t: now });
-    while (cursorTrailPointHistory.length > 4) {
-        cursorTrailPointHistory.shift();
+
+    const distance = Math.hypot(x - head.x, y - head.y);
+    if (distance < CURSOR_TRAIL_LASER_MIN_DISTANCE) {
+        head.x = x;
+        head.y = y;
+        head.t = now;
+        return;
     }
-}
 
-function sampleCatmullRomPoint(p0, p1, p2, p3, progress) {
-    const t2 = progress * progress;
-    const t3 = t2 * progress;
-    return {
-        x: 0.5 * (
-            (2 * p1.x)
-            + (-p0.x + p2.x) * progress
-            + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
-            + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-        ),
-        y: 0.5 * (
-            (2 * p1.y)
-            + (-p0.y + p2.y) * progress
-            + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2
-            + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-        ),
-    };
-}
-
-function getCursorTrailTurnAmount() {
-    if (cursorTrailPointHistory.length < 3) return 0;
-    const p0 = cursorTrailPointHistory[cursorTrailPointHistory.length - 3];
-    const p1 = cursorTrailPointHistory[cursorTrailPointHistory.length - 2];
-    const p2 = cursorTrailPointHistory[cursorTrailPointHistory.length - 1];
-    const ax = p1.x - p0.x;
-    const ay = p1.y - p0.y;
-    const bx = p2.x - p1.x;
-    const by = p2.y - p1.y;
-    const aLength = Math.hypot(ax, ay);
-    const bLength = Math.hypot(bx, by);
-    if (aLength < 0.1 || bLength < 0.1) return 0;
-    const cosine = Math.max(-1, Math.min(1, (ax * bx + ay * by) / (aLength * bLength)));
-    return Math.acos(cosine) / Math.PI;
-}
-
-function buildCursorTrailPathPoints(fromX, fromY, toX, toY, segmentCount) {
-    const fallback = [];
-    for (let i = 0; i <= segmentCount; i++) {
-        const progress = i / segmentCount;
-        fallback.push({
-            x: fromX + (toX - fromX) * progress,
-            y: fromY + (toY - fromY) * progress,
+    const elapsed = Math.max(1, now - head.t);
+    const inserted = [{ x, y, t: now }];
+    const bridgeCount = Math.min(8, Math.max(0, Math.floor(distance / CURSOR_TRAIL_LASER_INSERT_DISTANCE) - 1));
+    for (let i = 1; i <= bridgeCount; i++) {
+        const progress = i / (bridgeCount + 1);
+        inserted.push({
+            x: x + (head.x - x) * progress,
+            y: y + (head.y - y) * progress,
+            t: now - Math.min(40, elapsed * progress),
         });
     }
-    if (cursorTrailPointHistory.length < 3) return fallback;
 
-    const p0 = cursorTrailPointHistory[cursorTrailPointHistory.length - 3];
-    const p1 = cursorTrailPointHistory[cursorTrailPointHistory.length - 2];
-    const p2 = cursorTrailPointHistory[cursorTrailPointHistory.length - 1];
-    const p3 = {
-        x: p2.x + (p2.x - p1.x) * 0.55,
-        y: p2.y + (p2.y - p1.y) * 0.55,
-    };
-    const points = [];
-    for (let i = 0; i <= segmentCount; i++) {
-        points.push(sampleCatmullRomPoint(p0, p1, p2, p3, i / segmentCount));
-    }
-    return points;
+    cursorTrailLaserPoints = inserted.concat(cursorTrailLaserPoints);
+    trimCursorLaserPoints(now);
 }
 
-function spawnCursorTrailStreak(fromX, fromY, toX, toY, distance, now, ageIndex = 0, followX = 0, followY = 0) {
-    const layer = ensureCursorTrailLayer();
+function drawCursorTrailSegment(ctx, fromPoint, toPoint, width, color, alpha) {
+    if (alpha <= 0.01 || width <= 0.1) return;
+    ctx.lineWidth = width;
+    ctx.strokeStyle = cursorTrailRgba(color, alpha);
+    ctx.beginPath();
+    ctx.moveTo(fromPoint.x, fromPoint.y);
+    ctx.lineTo(toPoint.x, toPoint.y);
+    ctx.stroke();
+}
+
+function drawCursorTrailHead(ctx, point, primary, core) {
+    const gradient = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, 14);
+    gradient.addColorStop(0, cursorTrailRgba(core, 0.78));
+    gradient.addColorStop(0.34, cursorTrailRgba(primary, 0.38));
+    gradient.addColorStop(1, cursorTrailRgba(primary, 0));
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 14, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function drawCursorLaserTrailFrame(now) {
+    cursorTrailFrameId = null;
+    if (!cursorTrailEnabled || getCursorTrailStylePreference() !== "laser" || document.hidden) {
+        clearCursorTrailCanvas();
+        return;
+    }
+
+    ensureCursorTrailCanvas();
+    if (!cursorTrailCanvasContext) return;
+    resizeCursorTrailCanvas();
+    trimCursorLaserPoints(now);
+
+    const ctx = cursorTrailCanvasContext;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    ctx.clearRect(0, 0, width, height);
+
+    if (cursorTrailLaserPoints.length < 2) {
+        return;
+    }
+
     const palette = cursorTrailPalette.length ? cursorTrailPalette : getCursorThemePalette(getActiveCursorThemeWorld());
     const primary = palette[0] || [212, 168, 67];
-    const core = palette[3] || [245, 240, 224];
     const shadow = palette[1] || [74, 139, 194];
-    const safeDistance = Math.max(10, Math.min(distance || 10, 40));
-    const angle = Math.atan2(toY - fromY, toX - fromX) * 180 / Math.PI;
-    const centerX = (fromX + toX) / 2;
-    const centerY = (fromY + toY) / 2;
-    const thickness = Math.max(1.8, 5.4 - ageIndex * 0.42);
-    const followScale = Math.max(0.45, 1 - ageIndex * 0.08);
-    const streak = document.createElement("span");
-    streak.className = "cursor-trail-streak";
-    streak.style.left = `${centerX}px`;
-    streak.style.top = `${centerY}px`;
-    streak.style.width = `${safeDistance + 18}px`;
-    streak.style.setProperty("--streak-thickness", `${thickness}px`);
-    streak.style.setProperty("--streak-angle", `${angle}deg`);
-    streak.style.setProperty("--streak-follow-x", `${followX * followScale}px`);
-    streak.style.setProperty("--streak-follow-y", `${followY * followScale}px`);
-    streak.style.setProperty("--trail-rgb", primary.join(", "));
-    streak.style.setProperty("--trail-core-rgb", core.join(", "));
-    streak.style.setProperty("--trail-shadow-rgb", shadow.join(", "));
-    streak.addEventListener("animationend", () => removeCursorTrailDot(streak), { once: true });
-    layer.appendChild(streak);
-    cursorTrailDots.push(streak);
-    while (cursorTrailDots.length > CURSOR_TRAIL_MAX_DOTS) {
-        removeCursorTrailDot(cursorTrailDots[0]);
+    const core = palette[3] || [245, 240, 224];
+    const cumulative = [0];
+    let totalDistance = 0;
+    for (let i = 1; i < cursorTrailLaserPoints.length; i++) {
+        const current = cursorTrailLaserPoints[i];
+        const previous = cursorTrailLaserPoints[i - 1];
+        totalDistance += Math.hypot(current.x - previous.x, current.y - previous.y);
+        cumulative.push(totalDistance);
+    }
+    const totalRef = Math.max(1, totalDistance);
+
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for (let i = cursorTrailLaserPoints.length - 2; i >= 0; i--) {
+        const fromPoint = cursorTrailLaserPoints[i];
+        const toPoint = cursorTrailLaserPoints[i + 1];
+        const progress = Math.min(1, cumulative[i] / totalRef);
+        const ageFade = Math.max(0, 1 - (now - fromPoint.t) / CURSOR_TRAIL_LASER_MAX_AGE_MS);
+        const tailFade = Math.pow(1 - progress, 1.3);
+        const alpha = ageFade * tailFade;
+        const tailMix = Math.max(0, Math.min(1, (progress - 0.68) / 0.32));
+        const bodyColor = mixCursorTrailColor(primary, shadow, tailMix);
+        const bodyWidth = 1 + 5.6 * Math.pow(1 - progress, 0.9);
+        drawCursorTrailSegment(ctx, fromPoint, toPoint, bodyWidth + 7, primary, alpha * 0.18);
+        drawCursorTrailSegment(ctx, fromPoint, toPoint, bodyWidth, bodyColor, alpha * 0.72);
+    }
+    drawCursorTrailHead(ctx, cursorTrailLaserPoints[0], primary, core);
+    ctx.globalCompositeOperation = "source-over";
+
+    cursorTrailFrameId = window.requestAnimationFrame(drawCursorLaserTrailFrame);
+}
+
+function scheduleCursorLaserTrailFrame() {
+    ensureCursorTrailCanvas();
+    if (!cursorTrailFrameId) {
+        cursorTrailFrameId = window.requestAnimationFrame(drawCursorLaserTrailFrame);
     }
 }
 
@@ -1480,12 +1783,16 @@ function spawnCursorClickFeedback(x, y) {
     const palette = cursorTrailPalette.length ? cursorTrailPalette : getCursorThemePalette(getActiveCursorThemeWorld());
     const primary = palette[0] || [212, 168, 67];
     const core = palette[3] || [245, 240, 224];
+    const sizeOption = getCursorClickEffectRadiusOption();
     const ripple = document.createElement("span");
     ripple.className = "cursor-click-ripple";
     ripple.style.left = `${x}px`;
     ripple.style.top = `${y}px`;
     ripple.style.setProperty("--click-rgb", primary.join(", "));
     ripple.style.setProperty("--click-core-rgb", core.join(", "));
+    ripple.style.setProperty("--click-base-size", `${sizeOption.baseSize}px`);
+    ripple.style.setProperty("--click-scale-from", String(sizeOption.scaleFrom));
+    ripple.style.setProperty("--click-scale-to", String(sizeOption.scaleTo));
     ripple.addEventListener("animationend", () => removeCursorClickElement(ripple), { once: true });
     layer.appendChild(ripple);
     cursorClickElements.push(ripple);
@@ -1505,6 +1812,7 @@ function spawnCursorClickFeedback(x, y) {
         spark.style.height = spark.style.width;
         spark.style.setProperty("--spark-x", `${sparkX}px`);
         spark.style.setProperty("--spark-y", `${sparkY}px`);
+        spark.style.setProperty("--click-spark-scale", String(sizeOption.sparkScale));
         spark.style.setProperty("--click-rgb", primary.join(", "));
         spark.style.setProperty("--click-core-rgb", core.join(", "));
         spark.addEventListener("animationend", () => removeCursorClickElement(spark), { once: true });
@@ -1517,62 +1825,67 @@ function spawnCursorClickFeedback(x, y) {
     }
 }
 
-function handleCursorTrailMove(event) {
-    if (!cursorTrailEnabled || document.hidden) return;
-    if (event.pointerType && event.pointerType !== "mouse") return;
-    const now = performance.now();
-    const x = event.clientX;
-    const y = event.clientY;
+function processCursorTrailSample(x, y, now, trailStyle) {
     const dx = cursorTrailLastTime ? x - cursorTrailLastX : 8;
     const dy = cursorTrailLastTime ? y - cursorTrailLastY : 0;
     const distance = cursorTrailLastTime ? Math.hypot(dx, dy) : 10;
-    const elapsed = cursorTrailLastTime ? Math.max(8, now - cursorTrailLastTime) : 16;
-    const trailStyle = getCursorTrailStylePreference();
-    const minMs = trailStyle === "stardust" ? 16 : 8;
-    const minDistance = trailStyle === "stardust" ? 8 : 4;
-    if (cursorTrailLastTime && now - cursorTrailLastTime < minMs && distance < minDistance) return;
-    const fromX = cursorTrailLastTime ? cursorTrailLastX : x - 8;
-    const fromY = cursorTrailLastTime ? cursorTrailLastY : y;
+
+    if (trailStyle === "stardust" && cursorTrailLastTime && now - cursorTrailLastTime < 16 && distance < 8) {
+        return;
+    }
+    if (trailStyle === "laser" && cursorTrailLastTime && distance < CURSOR_TRAIL_LASER_MIN_DISTANCE) {
+        pushCursorLaserPoint(x, y, now);
+        cursorTrailLastX = x;
+        cursorTrailLastY = y;
+        cursorTrailLastTime = now;
+        scheduleCursorLaserTrailFrame();
+        return;
+    }
+
     cursorTrailLastX = x;
     cursorTrailLastY = y;
     cursorTrailLastTime = now;
-    cursorTrailLastDeltaX = distance > 0 ? dx : cursorTrailLastDeltaX;
-    cursorTrailLastDeltaY = distance > 0 ? dy : cursorTrailLastDeltaY;
-    pushCursorTrailPoint(x, y, now);
+
     if (trailStyle === "stardust") {
         spawnCursorTrailDot(x, y, distance, now);
     } else {
-        const turnAmount = getCursorTrailTurnAmount();
-        const segmentCount = Math.max(1, Math.min(10, Math.ceil(distance / 32) + Math.ceil(turnAmount * 5)));
-        const pathPoints = buildCursorTrailPathPoints(fromX, fromY, x, y, segmentCount);
-        const endPoint = pathPoints[pathPoints.length - 1] || { x, y };
-        const beforeEndPoint = pathPoints[pathPoints.length - 2] || { x: fromX, y: fromY };
-        const tangentX = endPoint.x - beforeEndPoint.x;
-        const tangentY = endPoint.y - beforeEndPoint.y;
-        const tangentDistance = Math.hypot(tangentX, tangentY);
-        const lastDeltaDistance = Math.hypot(cursorTrailLastDeltaX, cursorTrailLastDeltaY) || 1;
-        const directionX = tangentDistance > 0.1 ? tangentX / tangentDistance : (cursorTrailLastDeltaX || 1) / lastDeltaDistance;
-        const directionY = tangentDistance > 0.1 ? tangentY / tangentDistance : cursorTrailLastDeltaY / lastDeltaDistance;
-        const speed = distance / elapsed;
-        const followDistance = Math.max(4, Math.min(18, distance * 0.1 + speed * 2.2 + turnAmount * 4));
-        const followX = directionX * followDistance;
-        const followY = directionY * followDistance;
-        for (let i = 1; i < pathPoints.length; i++) {
-            const previousPoint = pathPoints[i - 1];
-            const nextPoint = pathPoints[i];
-            spawnCursorTrailStreak(
-                previousPoint.x,
-                previousPoint.y,
-                nextPoint.x,
-                nextPoint.y,
-                Math.hypot(nextPoint.x - previousPoint.x, nextPoint.y - previousPoint.y),
-                now,
-                pathPoints.length - 1 - i,
-                followX,
-                followY
-            );
-        }
+        pushCursorLaserPoint(x, y, now);
+        scheduleCursorLaserTrailFrame();
     }
+}
+
+function cursorTrailEventSamples(event, trailStyle) {
+    if (trailStyle !== "laser" || typeof event.getCoalescedEvents !== "function") {
+        return [event];
+    }
+    const coalesced = event.getCoalescedEvents().filter((sample) => (
+        Number.isFinite(sample.clientX) && Number.isFinite(sample.clientY)
+    ));
+    const samples = coalesced.length ? coalesced.slice() : [event];
+    const lastSample = samples[samples.length - 1];
+    if (!lastSample || lastSample.clientX !== event.clientX || lastSample.clientY !== event.clientY) {
+        samples.push(event);
+    }
+    if (samples.length <= CURSOR_TRAIL_LASER_MAX_BATCH_SAMPLES) return samples;
+    const step = Math.ceil(samples.length / CURSOR_TRAIL_LASER_MAX_BATCH_SAMPLES);
+    return samples.filter((_, index) => index === samples.length - 1 || index % step === 0);
+}
+
+function handleCursorTrailMove(event) {
+    if (!cursorTrailEnabled || document.hidden) return;
+    if (event.pointerType && event.pointerType !== "mouse") return;
+    const trailStyle = getCursorTrailStylePreference();
+    const samples = cursorTrailEventSamples(event, trailStyle);
+    const baseNow = performance.now();
+    samples.forEach((sample, index) => {
+        const isLastSample = index === samples.length - 1;
+        const projectedNow = baseNow - (samples.length - 1 - index) * 1.35;
+        let sampleNow = isLastSample ? baseNow : Math.min(baseNow, projectedNow);
+        if (cursorTrailLastTime && sampleNow <= cursorTrailLastTime) {
+            sampleNow = cursorTrailLastTime + 0.75;
+        }
+        processCursorTrailSample(sample.clientX, sample.clientY, sampleNow, trailStyle);
+    });
 }
 
 function handleCursorClick(event) {
@@ -1621,6 +1934,8 @@ function updateCursorSettingsUi() {
     const tipGlowRadius = getCursorTipGlowRadiusPreference();
     const tipGlowRadiusOption = getCursorTipGlowRadiusOption(tipGlowRadius);
     const clickEffectEnabled = getCursorClickEffectPreference();
+    const clickEffectRadius = getCursorClickEffectRadiusPreference();
+    const clickEffectRadiusOption = getCursorClickEffectRadiusOption(clickEffectRadius);
     const trailStyle = getCursorTrailStylePreference();
     const trailStyleOption = CURSOR_TRAIL_STYLE_OPTIONS[getCursorTrailStyleIndex(trailStyle)];
     if (cursorStyleCheckbox) cursorStyleCheckbox.checked = styleEnabled;
@@ -1630,6 +1945,9 @@ function updateCursorSettingsUi() {
     if (cursorTipGlowRadiusValue) cursorTipGlowRadiusValue.textContent = t(tipGlowRadiusOption.labelKey);
     if (cursorTipGlowRadiusPrevBtn) cursorTipGlowRadiusPrevBtn.disabled = !tipGlowEnabled;
     if (cursorTipGlowRadiusNextBtn) cursorTipGlowRadiusNextBtn.disabled = !tipGlowEnabled;
+    if (cursorClickEffectRadiusValue) cursorClickEffectRadiusValue.textContent = t(clickEffectRadiusOption.labelKey);
+    if (cursorClickEffectRadiusPrevBtn) cursorClickEffectRadiusPrevBtn.disabled = !clickEffectEnabled;
+    if (cursorClickEffectRadiusNextBtn) cursorClickEffectRadiusNextBtn.disabled = !clickEffectEnabled;
     if (cursorTrailStyleValue) cursorTrailStyleValue.textContent = t(trailStyleOption.labelKey);
     if (cursorTrailStylePrevBtn) cursorTrailStylePrevBtn.disabled = !trailEnabled;
     if (cursorTrailStyleNextBtn) cursorTrailStyleNextBtn.disabled = !trailEnabled;
@@ -1656,11 +1974,16 @@ function updateCursorSettingsUi() {
             ? t("settings.cursor_click_effect_enabled_note")
             : t("settings.cursor_click_effect_disabled_note");
     }
+    if (cursorClickEffectRadiusNote) {
+        cursorClickEffectRadiusNote.textContent = t(clickEffectRadiusOption.noteKey);
+    }
     if (cursorTipGlowRadiusControl) cursorTipGlowRadiusControl.hidden = !tipGlowEnabled;
+    if (cursorClickEffectRadiusControl) cursorClickEffectRadiusControl.hidden = !clickEffectEnabled;
     if (cursorTrailStyleControl) cursorTrailStyleControl.hidden = !trailEnabled;
     if (cursorPreviewPanel) {
         cursorPreviewPanel.dataset.trailStyle = trailStyle;
         cursorPreviewPanel.dataset.tipGlowRadius = tipGlowRadius;
+        cursorPreviewPanel.dataset.clickRadius = clickEffectRadius;
         cursorPreviewPanel.classList.toggle("cursor-preview-style-off", !styleEnabled);
         cursorPreviewPanel.classList.toggle("cursor-preview-trail-off", !trailEnabled);
         cursorPreviewPanel.classList.toggle("cursor-preview-tip-glow-off", !tipGlowEnabled);
@@ -1674,9 +1997,10 @@ function updateCursorSettingsUi() {
 
 function applyCursorPreferences(options = {}) {
     applyCursorTheme(getActiveCursorThemeWorld());
-    document.body.classList.toggle("cursor-theme-enabled", getCursorStylePreference());
-    setCursorTrailActive(getCursorTrailPreference());
-    setCursorClickFeedbackActive(getCursorClickEffectPreference());
+    const visibleCursorEffects = !isPreloadingActive();
+    document.body.classList.toggle("cursor-theme-enabled", visibleCursorEffects && getCursorStylePreference());
+    setCursorTrailActive(visibleCursorEffects && getCursorTrailPreference());
+    setCursorClickFeedbackActive(visibleCursorEffects && getCursorClickEffectPreference());
     if (options.updateUi !== false) updateCursorSettingsUi();
 }
 
@@ -1696,7 +2020,7 @@ function setCursorTipGlowPreference(enabled) {
 }
 
 function setCursorTipGlowRadiusPreference(radius) {
-    const selectedRadius = CURSOR_TIP_GLOW_RADIUS_OPTIONS.some((option) => option.value === radius) ? radius : "medium";
+    const selectedRadius = CURSOR_TIP_GLOW_RADIUS_OPTIONS.some((option) => option.value === radius) ? radius : "large";
     writeStoredString(CURSOR_TIP_GLOW_RADIUS_STORAGE_KEY, selectedRadius);
     applyCursorPreferences();
 }
@@ -1706,8 +2030,14 @@ function setCursorClickEffectPreference(enabled) {
     applyCursorPreferences();
 }
 
+function setCursorClickEffectRadiusPreference(radius) {
+    const selectedRadius = CURSOR_CLICK_EFFECT_RADIUS_OPTIONS.some((option) => option.value === radius) ? radius : "large";
+    writeStoredString(CURSOR_CLICK_EFFECT_RADIUS_STORAGE_KEY, selectedRadius);
+    applyCursorPreferences();
+}
+
 function setCursorTrailStylePreference(style) {
-    const selectedStyle = CURSOR_TRAIL_STYLE_OPTIONS.some((option) => option.value === style) ? style : "laser";
+    const selectedStyle = CURSOR_TRAIL_STYLE_OPTIONS.some((option) => option.value === style) ? style : "stardust";
     writeStoredString(CURSOR_TRAIL_STYLE_STORAGE_KEY, selectedStyle);
     clearCursorTrailDots();
     applyCursorPreferences();
@@ -1723,6 +2053,12 @@ function cycleCursorTipGlowRadius(direction) {
     const currentIndex = getCursorTipGlowRadiusIndex();
     const nextIndex = (currentIndex + direction + CURSOR_TIP_GLOW_RADIUS_OPTIONS.length) % CURSOR_TIP_GLOW_RADIUS_OPTIONS.length;
     setCursorTipGlowRadiusPreference(CURSOR_TIP_GLOW_RADIUS_OPTIONS[nextIndex].value);
+}
+
+function cycleCursorClickEffectRadius(direction) {
+    const currentIndex = getCursorClickEffectRadiusIndex();
+    const nextIndex = (currentIndex + direction + CURSOR_CLICK_EFFECT_RADIUS_OPTIONS.length) % CURSOR_CLICK_EFFECT_RADIUS_OPTIONS.length;
+    setCursorClickEffectRadiusPreference(CURSOR_CLICK_EFFECT_RADIUS_OPTIONS[nextIndex].value);
 }
 
 function getCurrentVoiceSettings() {
@@ -3516,6 +3852,7 @@ async function openSettings(source = "menu") {
     await loadSettings();
     resetSettingsScrollPosition();
     updateTutorialSettingsUi();
+    renderIconGallery();
 }
 
 function closeSettings() {
@@ -3851,6 +4188,13 @@ if (settingsBtn) {
     });
 }
 
+if (exitGameMenuBtn) {
+    exitGameMenuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        exitGameFromMainMenu();
+    });
+}
+
 if (galleryBackBtn) {
     galleryBackBtn.addEventListener("click", closeGallery);
 }
@@ -3872,6 +4216,23 @@ settingsTabButtons.forEach((button) => {
         setSettingsTab(button.dataset.settingsTab || settingsActiveTab);
     });
 });
+
+if (iconGalleryGrid) {
+    iconGalleryGrid.addEventListener("click", (e) => {
+        const target = e.target.closest("[data-apply-icon]");
+        if (!target || !iconGalleryGrid.contains(target)) return;
+        const iconId = target.getAttribute("data-apply-icon");
+        if (iconId) setGameIconPreference(iconId);
+    });
+    iconGalleryGrid.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        const target = e.target.closest(".icon-card[data-apply-icon]");
+        if (!target) return;
+        e.preventDefault();
+        const iconId = target.getAttribute("data-apply-icon");
+        if (iconId) setGameIconPreference(iconId);
+    });
+}
 
 if (tutorialEnabledCheckbox) {
     tutorialEnabledCheckbox.addEventListener("change", () => {
@@ -3995,6 +4356,14 @@ if (cursorClickEffectCheckbox) {
     cursorClickEffectCheckbox.addEventListener("change", () => {
         setCursorClickEffectPreference(cursorClickEffectCheckbox.checked);
     });
+}
+
+if (cursorClickEffectRadiusPrevBtn) {
+    cursorClickEffectRadiusPrevBtn.addEventListener("click", () => cycleCursorClickEffectRadius(-1));
+}
+
+if (cursorClickEffectRadiusNextBtn) {
+    cursorClickEffectRadiusNextBtn.addEventListener("click", () => cycleCursorClickEffectRadius(1));
 }
 
 if (cursorTrailStylePrevBtn) {
@@ -4341,7 +4710,7 @@ const QUICK_ACTIONS = {
         { labelKey: "quick_actions.museum.inventory", cmd: "__open_inventory__" },
         { labelKey: "quick_actions.museum.enter_starry_night", cmd: { en: "(enter starry night)", zh: "（进入星月夜）" } },
         { labelKey: "quick_actions.museum.enter_great_wave", cmd: { en: "(enter great wave)", zh: "（进入神奈川冲浪里）" } },
-        { labelKey: "quick_actions.museum.enter_sunrise", cmd: { en: "(enter impression sunrise)", zh: "（进入印象·日出）" } },
+        { labelKey: "quick_actions.museum.enter_sunrise", cmd: { en: "(enter impression sunrise)", zh: "（进入日出·印象）" } },
         { labelKey: "quick_actions.museum.help", cmd: "__open_tutorial__" }
     ],
     starry_night: [
@@ -4379,7 +4748,7 @@ function getLocalizedMoveCommand(targetWorldId) {
     const commandMap = {
         starry_night: { en: "(enter starry night)", zh: "（进入星月夜）" },
         great_wave: { en: "(enter great wave)", zh: "（进入神奈川冲浪里）" },
-        impression_sunrise: { en: "(enter impression sunrise)", zh: "（进入印象·日出）" },
+        impression_sunrise: { en: "(enter impression sunrise)", zh: "（进入日出·印象）" },
     };
     const command = commandMap[targetWorldId];
     return command ? (command[lang] || command.en) : `(${targetWorldId.replace(/_/g, " ")})`;
@@ -5081,6 +5450,7 @@ function showEndPageButton() {
 window.addEventListener("load", async () => {
     setPreloadStage("settings", 12);
     applyCursorPreferences({ updateUi: false });
+    initGameIconPreference();
     // Language: localStorage is authoritative for persistence across sessions
     const storedLang = localStorage.getItem("cursed_canvas_lang");
     let initialLang = storedLang || null;
@@ -5131,6 +5501,7 @@ window.addEventListener("load", async () => {
     if (typeof applyI18N === "function") applyI18N();
     updateTutorialSettingsUi();
     updateCursorSettingsUi();
+    initGameIconPreference();
     renderTutorialSurfaces();
 
     setPreloadStage("saves", 58);
@@ -5215,6 +5586,10 @@ window.addEventListener("storage", (e) => {
         || e.key === CURSOR_TRAIL_STYLE_STORAGE_KEY
     ) {
         applyCursorPreferences();
+    }
+    if (e.key === GAME_ICON_STORAGE_KEY) {
+        applyGameIcon(getGameIconPreference());
+        renderIconGallery();
     }
     if (e.key === "cursed_canvas_lang" && e.newValue && e.newValue !== (window.I18N && window.I18N.lang)) {
         switchLanguage(e.newValue);

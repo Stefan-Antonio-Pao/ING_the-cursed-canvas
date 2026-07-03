@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, session } = require("electron");
+const { app, BrowserWindow, dialog, session, ipcMain, nativeImage } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
@@ -9,6 +9,8 @@ let mainWindow = null;
 let backendProcess = null;
 let backendReady = false;
 let backendStartupExitPromise = null;
+let backendBaseUrl = null;
+const DEFAULT_WINDOW_ICON_PATH = "/static/icons/skeuomorphic.png?v=icon-gallery-20260703-four-icons";
 
 function logPath() {
   return path.join(app.getPath("userData"), "desktop.log");
@@ -197,9 +199,71 @@ function findFreePort(startPort = 7860) {
   });
 }
 
+function resolveIconUrl(iconPath) {
+  if (!backendBaseUrl) return null;
+  if (/^https?:\/\//i.test(iconPath)) return iconPath;
+  const separator = iconPath.startsWith("/") ? "" : "/";
+  return `${backendBaseUrl}${separator}${iconPath}`;
+}
+
+function fetchImageBuffer(url, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`HTTP ${response.statusCode} for ${url}`));
+        return;
+      }
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve(Buffer.concat(chunks)));
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`Icon fetch timed out: ${url}`));
+    });
+  });
+}
+
+async function applyWindowIconFromPath(iconPath) {
+  if (!mainWindow) return false;
+  const url = resolveIconUrl(iconPath);
+  if (!url) return false;
+  try {
+    const buffer = await fetchImageBuffer(url);
+    const image = nativeImage.createFromBuffer(buffer);
+    if (image.isEmpty()) {
+      appendLog(`Window icon image is empty for ${url}`);
+      return false;
+    }
+    let applied = false;
+    try {
+      mainWindow.setIcon(image);
+      applied = true;
+    } catch (err) {
+      appendLog(`Window icon update failed for BrowserWindow: ${err.message || String(err)}`);
+    }
+    if (process.platform === "darwin" && app.dock && typeof app.dock.setIcon === "function") {
+      try {
+        app.dock.setIcon(image);
+        applied = true;
+      } catch (err) {
+        appendLog(`Dock icon update failed: ${err.message || String(err)}`);
+      }
+    }
+    if (applied) appendLog(`Window icon updated from ${url}`);
+    return applied;
+  } catch (err) {
+    appendLog(`Window icon update failed: ${err.message || String(err)}`);
+    return false;
+  }
+}
+
 async function startBackend(config) {
   const port = await findFreePort();
   const url = `http://127.0.0.1:${port}`;
+  backendBaseUrl = url;
   return new Promise((resolve, reject) => {
     const env = {
       ...process.env,
@@ -294,6 +358,7 @@ async function boot() {
     const url = await startBackend(config);
     await Promise.race([waitForHttp(url), backendStartupExitPromise]);
     probeLocalRuntime(url);
+    await applyWindowIconFromPath(DEFAULT_WINDOW_ICON_PATH);
     await mainWindow.loadURL(url);
   } catch (err) {
     appendLog(`Startup failed: ${err.message || String(err)}`);
@@ -301,6 +366,16 @@ async function boot() {
     app.quit();
   }
 }
+
+ipcMain.handle("desktop:set-window-icon", async (_event, iconPath) => {
+  if (typeof iconPath !== "string" || !iconPath) return false;
+  return applyWindowIconFromPath(iconPath);
+});
+
+ipcMain.handle("desktop:quit-app", async () => {
+  app.quit();
+  return true;
+});
 
 app.whenReady().then(() => {
   configureMediaPermissions();

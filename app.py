@@ -667,14 +667,20 @@ _VOICE_ZH_TERM_REPLACEMENTS = (
     ("北战", "北斋"),
     ("葛饰北齐", "葛饰北斋"),
     ("葛饰北宅", "葛饰北斋"),
-    ("印象日出", "印象·日出"),
-    ("印像日出", "印象·日出"),
-    ("映像日出", "印象·日出"),
-    ("映象日出", "印象·日出"),
-    ("印象日处", "印象·日出"),
-    ("印象日初", "印象·日出"),
-    ("印象一出", "印象·日出"),
-    ("印象日出画", "印象·日出"),
+    ("印象日出", "日出·印象"),
+    ("印像日出", "日出·印象"),
+    ("映像日出", "日出·印象"),
+    ("映象日出", "日出·印象"),
+    ("印象日处", "日出·印象"),
+    ("印象日初", "日出·印象"),
+    ("印象一出", "日出·印象"),
+    ("印象日出画", "日出·印象"),
+    ("日出印象", "日出·印象"),
+    ("日处印象", "日出·印象"),
+    ("日出印像", "日出·印象"),
+    ("日出映像", "日出·印象"),
+    ("日出·印象", "日出·印象"),
+    ("印象·日出", "日出·印象"),
     ("莫内", "莫奈"),
     ("莫內", "莫奈"),
     ("摩奈", "莫奈"),
@@ -853,7 +859,7 @@ _VOICE_KNOWN_WORLD_ALIASES = {
     },
     "impression_sunrise": {
         "impression sunrise", "impression, sunrise", "sunrise", "monet", "claude monet", "harbor", "havre", "mist",
-        "印象·日出", "印象日出", "印象", "日出", "莫奈", "莫内", "克劳德·莫奈", "港口", "勒阿弗尔", "雾", "颜色",
+        "印象·日出", "印象日出", "日出·印象", "日出印象", "印象", "日出", "莫奈", "莫内", "克劳德·莫奈", "港口", "勒阿弗尔", "雾", "颜色",
     },
 }
 
@@ -1152,7 +1158,7 @@ def _build_voice_correction_messages(transcript, strength, lang, game_state):
             "请用中文全角括号包住整句，例如（四处看看）。如果玩家是在对 NPC 说话或提问，不要加括号。"
             "例如“我需要做什么”“我该怎么找到”“哪里有”“能告诉我吗”都属于提问，不要加括号。"
             "必须保留并修正游戏术语：海螺笛、安宁石、魔法灯笼、黄色颜料、雾透镜、日出颜料。"
-            "画作、人物、界面术语也必须修正为：星月夜、神奈川冲浪里、印象·日出、梵高、北斋、莫奈、NPC、颜色。"
+            "画作、人物、界面术语也必须修正为：星月夜、神奈川冲浪里、日出·印象、梵高、北斋、莫奈、NPC、颜色。"
             "中文语音常有平翘舌、前后鼻音和相近韵母误差：新越义/心悦夜/兴越夜/星乐夜都应优先按上下文修正为星月夜，"
             "深奈川/神内川应优先修正为神奈川，凡高/烦高/范高应修正为梵高。"
             "不要输出繁体字。寻找、搜索、选择、拿起、使用、吹奏、返回、进入、走进、前往都属于行动。"
@@ -1211,7 +1217,7 @@ def _build_voice_online_correction_messages(transcript, strength, lang, game_sta
             "严格判定意图：玩家在移动、寻找、拾取、使用、查看、返回、进入、前往时，输出必须用中文全角括号包住；"
             "玩家在询问、聊天、表达不知道该做什么、问 NPC 或画家时，绝对不要加括号。"
             "“我需要做什么”“我该怎么办”“哪里有”“请告诉我”“问一下”都是对话/提问。"
-            "必须强力修正这些游戏词：NPC、葛饰北斋、北斋、莫奈、梵高、星月夜、神奈川冲浪里、印象·日出、"
+            "必须强力修正这些游戏词：NPC、葛饰北斋、北斋、莫奈、梵高、星月夜、神奈川冲浪里、日出·印象、"
             "海螺笛、安宁石、魔法灯笼、黄色颜料、雾透镜、日出颜料、沙滩、岸边、礁石、颜色。"
             "常见错听：各式北战/葛式北斋/隔饰北斋->葛饰北斋；沙灿/沙谭/沙摊/沙坛->沙滩；"
             "新越义/心悦夜/兴越夜/星乐夜->星月夜；深奈川/神内川->神奈川；凡高/烦高/范高->梵高；"
@@ -2526,6 +2532,34 @@ def lock_experience_mode():
     return ("", 204)
 
 
+def _is_local_request():
+    remote_addr = request.remote_addr or ""
+    return remote_addr in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+
+def _shutdown_local_server(delay=0.35):
+    shutdown_func = request.environ.get("werkzeug.server.shutdown")
+
+    def stop_server():
+        logger.info("Local browser exit requested; shutting down Flask server.")
+        if shutdown_func:
+            shutdown_func()
+            return
+        os._exit(0)
+
+    timer = threading.Timer(delay, stop_server)
+    timer.daemon = True
+    timer.start()
+
+
+@app.route("/api/quit", methods=["POST"])
+def quit_local_server():
+    if not _is_local_request():
+        return jsonify({"error": "Quit is only available from the local machine."}), 403
+    _shutdown_local_server()
+    return jsonify({"status": "ok", "message": "Local server is shutting down."})
+
+
 @app.route("/api/reset", methods=["POST"])
 def reset_game():
     preserved_ai_settings = {
@@ -2811,10 +2845,10 @@ _GALLERY_SUPPLEMENT_ZH = {
     "impression_sunrise": {
         "order": 30,
         "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/Claude_Monet%2C_Impression%2C_soleil_levant.jpg/1280px-Claude_Monet%2C_Impression%2C_soleil_levant.jpg",
-        "image_alt": "克劳德·莫奈《印象·日出》",
+        "image_alt": "克劳德·莫奈《日出·印象》",
         "image_credit": "Public domain image via Wikimedia Commons",
         "artwork_intro": [
-            "《印象·日出》创作于1872年，将勒阿弗尔港呈现为雾、水、烟尘和一轮小小的橙色太阳。它松散的笔法帮助印象派得名。",
+            "《日出·印象》创作于1872年，将勒阿弗尔港呈现为雾、水、烟尘和一轮小小的橙色太阳。它松散的笔法帮助印象派得名。",
             "这幅画对硬轮廓的兴趣不如对稍纵即逝瞬间的感觉：光芒触及水面，在眼睛能将一切确定之前。"
         ],
         "artist_intro": [
@@ -3209,7 +3243,7 @@ def _build_story_zh(gs):
 
     if "impression_sunrise" in gs.visited_worlds:
         lines.append(
-            "在《印象·日出》中，港口消融在雾霭、烟雾和倒影之中。"
+            "在《日出·印象》中，港口消融在雾霭、烟雾和倒影之中。"
             "克劳德·莫奈凝视着如同转瞬即逝的感觉般的黎明，仿佛整个世界都依赖于那一抹橙色的光芒。"
         )
         if sunrise_quote:

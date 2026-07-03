@@ -25,6 +25,10 @@
     "continue": "继续游戏",
     "gallery": "画廊",
     "settings": "设置",
+    "exit_game": "退出游戏",
+    "exit_game_closing": "正在停止本地游戏服务……",
+    "exit_game_server_stopped": "本地服务正在停止。你可以关闭当前标签页。",
+    "exit_game_unavailable": "无法自动停止本地服务。请关闭终端或当前浏览器标签页以退出游戏。",
     "status_placeholder": "当前版本仅支持简体中文和英文。",
     "starting_adventure": "正在开始新的冒险……"
   },
@@ -136,7 +140,7 @@
       "inventory": "物品栏",
       "enter_starry_night": "进入星月夜",
       "enter_great_wave": "进入神奈川冲浪里",
-      "enter_sunrise": "进入印象·日出",
+      "enter_sunrise": "进入日出·印象",
       "help": "帮助"
     },
     "starry_night": {
@@ -231,6 +235,22 @@
     "tab_ai": "AI 模型",
     "tab_voice": "语音",
     "tab_cursor": "光标",
+    "tab_icon": "游戏图标",
+    "icon_kicker": "游戏图标",
+    "icon_heading": "游戏图标",
+    "icon_desc": "选择浏览器标签页与主屏幕显示的游戏图标。未来会陆续加入更多图标。",
+    "icon_in_use": "使用中",
+    "icon_apply": "应用此图标",
+    "icon_apply_hint": "点击任意图标即可立即应用，选择会保存在本设备上。",
+    "icon_applied": "游戏图标已更新。",
+    "icon_name_skeuomorphic": "拟物化",
+    "icon_desc_skeuomorphic": "带绘画质感的经典立体徽章。",
+    "icon_name_flattened": "扁平化",
+    "icon_desc_flattened": "线条简洁的现代扁平徽章。",
+    "icon_name_concept": "概念版本",
+    "icon_desc_concept": "构图更完整的概念徽章，保留浪潮与日落场景。",
+    "icon_name_clean": "简洁版本",
+    "icon_desc_clean": "形状更克制的简洁徽章，整体视觉更清爽。",
     "voice_kicker": "语音输入",
     "voice_heading": "语音修正",
     "voice_desc": "在文字进入指令框前，先修正语音转写结果。",
@@ -274,6 +294,13 @@
     "cursor_click_effect_toggle": "点击水波纹反馈",
     "cursor_click_effect_enabled_note": "点击时会出现柔和水波纹和少量星光粒子。",
     "cursor_click_effect_disabled_note": "点击反馈已隐藏。",
+    "cursor_click_effect_radius_label": "涟漪范围",
+    "cursor_click_effect_radius_small": "小",
+    "cursor_click_effect_radius_medium": "中",
+    "cursor_click_effect_radius_large": "大",
+    "cursor_click_effect_radius_small_note": "紧凑的涟漪与靠近点击位置的星点。",
+    "cursor_click_effect_radius_medium_note": "均衡的点击涟漪与少量星点。",
+    "cursor_click_effect_radius_large_note": "更宽的涟漪与更广的星点，反馈更醒目。",
     "cursor_trail_toggle": "使用主题光效拖尾",
     "cursor_trail_enabled_note": "移动鼠标时会留下短暂的主题色光效。",
     "cursor_trail_disabled_note": "鼠标拖尾已隐藏。",
@@ -434,7 +461,7 @@
     "museum": "魔法博物馆",
     "starry_night": "星月夜",
     "great_wave": "神奈川冲浪里",
-    "impression_sunrise": "印象·日出"
+    "impression_sunrise": "日出·印象"
   },
   "world_descriptions": {
     "museum": "你站在月光照耀的博物馆画廊中。",
@@ -445,7 +472,7 @@
   "quest_names": {
     "starry_night": "星月夜",
     "great_wave": "神奈川冲浪里",
-    "impression_sunrise": "印象·日出"
+    "impression_sunrise": "日出·印象"
   },
   "item_descriptions": {
     "lantern": "揭示阴影试图隐藏的东西。",
