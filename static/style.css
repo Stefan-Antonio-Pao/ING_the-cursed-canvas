@@ -1418,6 +1418,7 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 
 .settings-card.settings-card-scroll-limited {
     overflow-y: auto;
+    padding-bottom: calc(clamp(20px, 3vw, 30px) + clamp(24px, 5vh, 64px));
     scrollbar-gutter: stable;
 }
 

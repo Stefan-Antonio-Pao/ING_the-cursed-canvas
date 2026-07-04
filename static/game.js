@@ -17,7 +17,7 @@ const TITLE_PARTICLE_THEME_COLORS = [
 // ── I18N ──
 window.I18N = null;
 const PRELOAD_STARTED_AT = performance.now();
-const PRELOAD_MIN_VISIBLE_MS = 2600;
+const PRELOAD_MIN_VISIBLE_MS = 3400;
 const PRELOAD_READY_HOLD_MS = 650;
 const PRELOAD_OVERLAY_FADE_MS = 860;
 
@@ -213,6 +213,19 @@ function getCurrentInterfaceLanguage() {
     if (storedLang) return storedLang;
     if (settingsData && settingsData.language && settingsData.language.current) return settingsData.language.current;
     return "en";
+}
+
+function getSettingsLanguageCurrent() {
+    const available = settingsData && settingsData.language && Array.isArray(settingsData.language.available)
+        ? settingsData.language.available
+        : Object.keys(LANG_LABELS);
+    const candidates = [
+        window.I18N && window.I18N.lang,
+        localStorage.getItem("cursed_canvas_lang"),
+        settingsData && settingsData.language && settingsData.language.current,
+    ];
+    const current = candidates.find((lang) => lang && available.includes(lang));
+    return current || available[0] || "en";
 }
 
 function refreshAllUI(sidePanelData) {
@@ -3561,8 +3574,11 @@ function setModeButtonsActive(mode, options = {}) {
 
 function setLanguageDisplay() {
     if (!languageValue) return;
-    const current = settingsData && settingsData.language && settingsData.language.current ? settingsData.language.current : "en";
-    languageValue.textContent = t("lang_label") || LANG_LABELS[current] || current;
+    const current = getSettingsLanguageCurrent();
+    if (settingsData && settingsData.language) {
+        settingsData.language.current = current;
+    }
+    languageValue.textContent = LANG_LABELS[current] || current;
 }
 
 function setPersonalApiExpanded(expanded) {
@@ -4275,7 +4291,7 @@ if (languagePrevBtn) {
             setSettingsStatus(t("settings.only_one_language"), "success");
             return;
         }
-        const current = settingsData && settingsData.language && settingsData.language.current ? settingsData.language.current : "en";
+        const current = getSettingsLanguageCurrent();
         const idx = available.indexOf(current);
         const next = available[(idx - 1 + available.length) % available.length];
         switchLanguage(next);
@@ -4289,7 +4305,7 @@ if (languageNextBtn) {
             setSettingsStatus(t("settings.only_one_language"), "success");
             return;
         }
-        const current = settingsData && settingsData.language && settingsData.language.current ? settingsData.language.current : "en";
+        const current = getSettingsLanguageCurrent();
         const idx = available.indexOf(current);
         const next = available[(idx + 1) % available.length];
         switchLanguage(next);
