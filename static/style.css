@@ -2001,6 +2001,7 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 
 .icon-card-body {
     display: flex;
+    flex: 1 1 auto;
     flex-direction: column;
     gap: 4px;
     padding: 10px 12px 12px;
@@ -2022,7 +2023,7 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 }
 
 .icon-card-status {
-    margin-top: 8px;
+    margin-top: auto;
     min-height: 34px;
     border-radius: 6px;
     border: 1px solid var(--border-light);
