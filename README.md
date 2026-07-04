@@ -2,6 +2,10 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+<p align="center">
+  <img src="static/icons/skeuomorphic.png" alt="The Cursed Canvas icon" width="144">
+</p>
+
 A web-based text adventure game blending art history with fantasy, powered by real AI.
 
 ## Story
@@ -23,14 +27,31 @@ each artwork has lost.
 - **Three playable worlds** with quests, items, and NPCs
 - **Bilingual UI (EN/ZH)** -- JSON resource files, in-game language switch, and a client-side
   `t()` function covering every screen.
-- **Cinematic title screen** with particle effects, a bridge transition into the main menu, and
-  staggered button reveals.
+- **Staged startup preload** with stable language rendering, progress feedback, and a
+  non-blocking local runtime check.
+- **Cinematic title screen** with particle effects, a bridge transition into the main menu,
+  staggered button reveals, and a runtime-aware Exit Game path.
 - **Beginner tutorial** -- an onboarding flow before the prologue (first playthrough only by
   default) plus an in-game tutorial dialog reachable from the Help quick action.
+- **Experimental voice input** with microphone recording, local transcription, transcript
+  correction settings, and optional auto-send.
+- **Themed cursor effects** -- painting-aware cursor styling, click feedback, tip glow, and
+  Chasing Light / Starlight Sparks trail modes.
+- **Game icon picker** -- choose the browser/home-screen icon from multiple new icon styles.
+- **Restoration Gallery** with painting records and bilingual art-historical context.
 - **Save slots** -- multiple slots with browser-side migration, unsaved-progress warnings, and
   story recap.
 - **Desktop build** (Electron + PyInstaller) for macOS and Windows.
 - **Full ML pipeline**: data labeling -> training -> evaluation -> deployment
+
+## Icon Set
+
+The v3 icon set includes four selectable styles. The default desktop asset is generated from the
+same visual direction.
+
+| Skeuomorphic | Flattened | Concept Version | Clean Version |
+|--------------|-----------|-----------------|---------------|
+| <img src="static/icons/skeuomorphic.png" alt="Skeuomorphic icon" width="96"> | <img src="static/icons/flattened.png" alt="Flattened icon" width="96"> | <img src="static/icons/concept.png" alt="Concept icon" width="96"> | <img src="static/icons/clean.png" alt="Clean icon" width="96"> |
 
 ## Quick Start
 
@@ -42,8 +63,9 @@ python -m ai.intent zh    # train Chinese classifier (~2 sec)
 python app.py             # start server
 ```
 
-Open **http://127.0.0.1:5000**. The local Phi-3-mini model downloads from HuggingFace on first
-use (~650MB, 5-15 min) and is cached afterward; the DeepSeek API mode needs no download.
+Open **http://127.0.0.1:5000**. The local Phi-3-mini chat model downloads from HuggingFace on
+first use (~650MB, 5-15 min) and is cached afterward; the DeepSeek API mode needs no download.
+Voice input is optional and requires microphone permission plus a working local speech runtime.
 
 ## Desktop Build
 
@@ -66,8 +88,8 @@ done once per install.
 ## How to Play
 
 Actions are wrapped in parentheses; dialogue is typed directly. Use the quick-action buttons
-under the input box for common moves (they update per location), or press **Help** to reopen
-the tutorial at any time.
+under the input box for common moves (they update per location), press **Help** to reopen the
+tutorial, or use the microphone button to try experimental voice input.
 
 | Command | Intent |
 |---------|--------|
@@ -93,8 +115,8 @@ cursed-canvas/
 ├── models/               # Trained EN/ZH classifier + vectorizer
 ├── experience_proxy/     # Optional DeepSeek-compatible trial-token proxy
 ├── desktop/              # Electron main process, config, assets
-├── static/ + templates/  # Chat UI, title screen, tutorial
-├── tests/                # World sequence and ZH term/state tests
+├── static/ + templates/  # Chat UI, preload/title screens, settings, gallery, tutorial
+├── tests/                # World sequence, voice, and ZH term/state tests
 ├── requirements.txt
 └── README.md
 ```
@@ -108,6 +130,9 @@ cursed-canvas/
   Desktop Build section above.
 - **Slow first load**: The local Phi-3-mini model downloads from HuggingFace and is cached
   afterward; switch to the DeepSeek API mode in Settings for instant responses.
+- **Voice input unavailable**: Voice is optional. Check microphone permission and the local voice
+  runtime status in Settings; on Windows, PyTorch or Microsoft Visual C++ runtime issues can make
+  local speech transcription unavailable.
 - **Out of memory**: Close other apps; the local model uses ~1.5GB RAM.
 - **Repetitive text**: Vary commands; use `help` to reset context.
 
