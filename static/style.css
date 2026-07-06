@@ -1365,9 +1365,11 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 
 /* Settings */
 #settings-view {
-    --settings-view-max-height: calc(100vh - 96px);
-    --settings-card-max-height: calc(var(--settings-view-max-height) - 98px);
+    --settings-view-max-height: calc(100dvh - max(96px, 6lh));
+    --settings-card-chrome-height: 98px;
+    --settings-card-max-height: calc(var(--settings-view-max-height) - var(--settings-card-chrome-height));
     --settings-card-synced-height: auto;
+    --settings-scroll-tail-space: clamp(28px, 5vh, 64px);
     --settings-heading-gap: 14px;
     --settings-group-gap: 24px;
     --settings-inner-gap: 12px;
@@ -1418,8 +1420,11 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
 
 .settings-card.settings-card-scroll-limited {
     overflow-y: auto;
-    padding-bottom: calc(clamp(20px, 3vw, 30px) + clamp(24px, 5vh, 64px));
     scrollbar-gutter: stable;
+}
+
+.settings-card.settings-card-scroll-limited .settings-tab-panel.active {
+    flex: 0 0 auto;
 }
 
 .settings-card::-webkit-scrollbar {
@@ -2372,6 +2377,17 @@ body[data-world="impression_sunrise"] #parallax-bg::before {
     font-size: 0.8rem;
     margin-top: 16px;
     text-align: center;
+}
+
+.settings-scroll-tail {
+    display: none;
+    flex: 0 0 var(--settings-scroll-tail-space);
+    min-height: var(--settings-scroll-tail-space);
+    pointer-events: none;
+}
+
+.settings-card.settings-card-scroll-limited .settings-scroll-tail {
+    display: block;
 }
 
 #settings-status.error {

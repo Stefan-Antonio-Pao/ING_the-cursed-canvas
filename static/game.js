@@ -244,6 +244,7 @@ function refreshAllUI(sidePanelData) {
     updateTutorialSettingsUi();
     updateCursorSettingsUi();
     renderIconGallery();
+    refreshIconApplyStatusHint();
     renderTutorialSurfaces();
     updateQuickActions(currentWorld);
     updateSidePanel(sidePanelData || null);
@@ -309,6 +310,8 @@ const galleryIndicator = document.getElementById("gallery-indicator");
 const settingsView = document.getElementById("settings-view");
 const settingsBackBtn = document.getElementById("settings-back-btn");
 const settingsCard = settingsView ? settingsView.querySelector(".settings-card") : null;
+const settingsTopbar = settingsView ? settingsView.querySelector(".settings-topbar") : null;
+const settingsTabs = settingsView ? settingsView.querySelector(".settings-tabs") : null;
 const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
 const settingsTabPanels = Array.from(document.querySelectorAll("[data-settings-tab-panel]"));
 const settingsFlowPrevBtn = document.getElementById("settings-flow-prev-btn");
@@ -1014,6 +1017,46 @@ function resetSettingsScrollPosition() {
     });
 }
 
+function readCssPixels(value) {
+    const parsed = parseFloat(value || "0");
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getElementOuterHeight(element) {
+    if (!element) return 0;
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return rect.height + readCssPixels(style.marginTop) + readCssPixels(style.marginBottom);
+}
+
+function syncSettingsCardChromeHeight() {
+    if (!settingsView) return 0;
+    const viewStyle = window.getComputedStyle(settingsView);
+    const viewGap = readCssPixels(viewStyle.rowGap || viewStyle.gap);
+    const chromeHeight = getElementOuterHeight(settingsTopbar) + getElementOuterHeight(settingsTabs) + (viewGap * 2);
+    if (chromeHeight > 0) {
+        settingsView.style.setProperty("--settings-card-chrome-height", `${Math.ceil(chromeHeight)}px`);
+    }
+    return chromeHeight;
+}
+
+function captureSettingsScrollPositions() {
+    const scrollable = [
+        settingsCard,
+        settingsView,
+        ...settingsTabPanels,
+        ...document.querySelectorAll(".settings-model-panel"),
+    ].filter(Boolean);
+    return scrollable.map((item) => ({ item, scrollTop: item.scrollTop, scrollLeft: item.scrollLeft }));
+}
+
+function restoreSettingsScrollPositions(positions) {
+    positions.forEach(({ item, scrollTop, scrollLeft }) => {
+        item.scrollTop = scrollTop;
+        item.scrollLeft = scrollLeft;
+    });
+}
+
 function measureSettingsCardHeightForPanel(panel, options = {}) {
     if (!settingsCard || !panel) return 0;
     const previousStates = settingsTabPanels.map((item) => ({
@@ -1079,9 +1122,12 @@ function syncSettingsPanelHeights() {
     settingsHeightSyncFrame = null;
     if (!settingsView || !settingsCard || !settingsTabPanels.length) return;
     if (!settingsView.classList.contains("active")) return;
+    const scrollPositions = captureSettingsScrollPositions();
+    syncSettingsCardChromeHeight();
     if (window.matchMedia && window.matchMedia("(max-width: 480px)").matches) {
         settingsCard.style.setProperty("--settings-card-synced-height", "auto");
         settingsCard.classList.remove("settings-card-scroll-limited");
+        restoreSettingsScrollPositions(scrollPositions);
         return;
     }
 
@@ -1107,6 +1153,7 @@ function syncSettingsPanelHeights() {
     settingsCard.style.visibility = previousVisibility;
     if (!maxHeight) {
         if (previousHeight) settingsCard.style.setProperty("--settings-card-synced-height", previousHeight);
+        restoreSettingsScrollPositions(scrollPositions);
         return;
     }
 
@@ -1117,6 +1164,7 @@ function syncSettingsPanelHeights() {
     const targetHeight = exceedsBoundary ? maxAllowed : maxHeight;
     settingsCard.style.setProperty("--settings-card-synced-height", `${Math.ceil(targetHeight)}px`);
     settingsCard.classList.toggle("settings-card-scroll-limited", exceedsBoundary);
+    restoreSettingsScrollPositions(scrollPositions);
 }
 
 function scheduleSettingsPanelHeightSync() {
@@ -1127,6 +1175,7 @@ function scheduleSettingsPanelHeightSync() {
 
 function setSettingsTab(tab, options = {}) {
     const selected = settingsTabPanels.some((panel) => panel.dataset.settingsTabPanel === tab) ? tab : "display";
+    const shouldResetScroll = options.resetScroll !== false && selected !== settingsActiveTab;
     settingsActiveTab = selected;
     settingsTabButtons.forEach((button) => {
         const active = button.dataset.settingsTab === selected;
@@ -1139,7 +1188,7 @@ function setSettingsTab(tab, options = {}) {
         panel.classList.toggle("active", active);
         panel.hidden = !active;
     });
-    if (options.resetScroll !== false) {
+    if (shouldResetScroll) {
         window.requestAnimationFrame(resetSettingsScrollPosition);
     }
     scheduleSettingsPanelHeightSync();
@@ -1312,17 +1361,19 @@ function getCursorTrailStyleIndex(style) {
     return index >= 0 ? index : 1;
 }
 
-const GAME_ICON_CACHE_VERSION = "icon-gallery-20260703-four-icons";
+const GAME_ICON_CACHE_VERSION = "icon-gallery-20260705-clean-default";
 const GAME_ICON_OPTIONS = [
+    { value: "clean", src: "/static/icons/clean.png", nameKey: "settings.icon_name_clean", descKey: "settings.icon_desc_clean" },
+    { value: "concept", src: "/static/icons/concept.png", nameKey: "settings.icon_name_concept", descKey: "settings.icon_desc_concept" },
     { value: "skeuomorphic", src: "/static/icons/skeuomorphic.png", nameKey: "settings.icon_name_skeuomorphic", descKey: "settings.icon_desc_skeuomorphic" },
     { value: "flattened", src: "/static/icons/flattened.png", nameKey: "settings.icon_name_flattened", descKey: "settings.icon_desc_flattened" },
-    { value: "concept", src: "/static/icons/concept.png", nameKey: "settings.icon_name_concept", descKey: "settings.icon_desc_concept" },
-    { value: "clean", src: "/static/icons/clean.png", nameKey: "settings.icon_name_clean", descKey: "settings.icon_desc_clean" },
 ];
-const GAME_ICON_DEFAULT = "skeuomorphic";
+const GAME_ICON_DEFAULT = "clean";
 
 function getGameIconOption(iconId) {
-    return GAME_ICON_OPTIONS.find((option) => option.value === iconId) || GAME_ICON_OPTIONS[0];
+    return GAME_ICON_OPTIONS.find((option) => option.value === iconId)
+        || GAME_ICON_OPTIONS.find((option) => option.value === GAME_ICON_DEFAULT)
+        || GAME_ICON_OPTIONS[0];
 }
 
 function getGameIconPreference() {
@@ -1337,6 +1388,26 @@ function getGameIconHref(option, options = {}) {
     url.searchParams.set("v", GAME_ICON_CACHE_VERSION);
     if (options.refresh) url.searchParams.set("selected", String(Date.now()));
     return `${url.pathname}${url.search}`;
+}
+
+function getDesktopIconPlatformSuffix() {
+    const platform = window.cursedCanvasDesktop && window.cursedCanvasDesktop.platform;
+    if (platform === "win32") return "windows";
+    if (platform === "darwin") return "macos";
+    return "";
+}
+
+function getGameIconPlatformText(baseKey) {
+    const settings = window.I18N && window.I18N.settings ? window.I18N.settings : {};
+    const platformSuffix = getDesktopIconPlatformSuffix();
+    const platformKey = platformSuffix ? `${baseKey}_${platformSuffix}` : "";
+    return (platformKey && settings[platformKey]) || settings[baseKey] || "";
+}
+
+function refreshIconApplyStatusHint() {
+    if (!iconApplyStatus) return;
+    const hint = getGameIconPlatformText("icon_apply_hint");
+    if (hint) iconApplyStatus.textContent = hint;
 }
 
 function upsertGameIconLink(id, rel, href, options = {}) {
@@ -1364,15 +1435,15 @@ function applyGameIcon(iconId, options = {}) {
     upsertGameIconLink("game-favicon", "icon", href, { type: "image/png", replace: true });
     upsertGameIconLink("game-apple-touch-icon", "apple-touch-icon", href);
     if (window.cursedCanvasDesktop && typeof window.cursedCanvasDesktop.setWindowIcon === "function") {
-        window.cursedCanvasDesktop.setWindowIcon(href).catch(() => {});
+        window.cursedCanvasDesktop.setWindowIcon(href, option.value).catch(() => {});
     }
     if (options.silent) return;
-    if (window.I18N && window.I18N.settings && window.I18N.settings.icon_applied && iconApplyStatus) {
-        iconApplyStatus.textContent = window.I18N.settings.icon_applied;
+    const appliedMessage = getGameIconPlatformText("icon_applied");
+    if (appliedMessage && iconApplyStatus) {
+        iconApplyStatus.textContent = appliedMessage;
         window.clearTimeout(applyGameIcon.statusTimer);
         applyGameIcon.statusTimer = window.setTimeout(() => {
-            const hint = window.I18N && window.I18N.settings && window.I18N.settings.icon_apply_hint;
-            if (hint && iconApplyStatus) iconApplyStatus.textContent = hint;
+            refreshIconApplyStatusHint();
         }, 2600);
     }
 }
@@ -3869,6 +3940,7 @@ async function openSettings(source = "menu") {
     resetSettingsScrollPosition();
     updateTutorialSettingsUi();
     renderIconGallery();
+    refreshIconApplyStatusHint();
 }
 
 function closeSettings() {
@@ -4536,6 +4608,7 @@ window.addEventListener("keydown", (e) => {
             return;
         }
     }
+    if (isPreloadingActive()) return;
     // Title screen: any key dismisses it
     if (!titleScreenDismissed && titleScreen && !titleScreen.classList.contains("hidden")) {
         e.preventDefault();
@@ -5518,6 +5591,7 @@ window.addEventListener("load", async () => {
     updateTutorialSettingsUi();
     updateCursorSettingsUi();
     initGameIconPreference();
+    refreshIconApplyStatusHint();
     renderTutorialSurfaces();
 
     setPreloadStage("saves", 58);
@@ -5606,6 +5680,7 @@ window.addEventListener("storage", (e) => {
     if (e.key === GAME_ICON_STORAGE_KEY) {
         applyGameIcon(getGameIconPreference());
         renderIconGallery();
+        refreshIconApplyStatusHint();
     }
     if (e.key === "cursed_canvas_lang" && e.newValue && e.newValue !== (window.I18N && window.I18N.lang)) {
         switchLanguage(e.newValue);

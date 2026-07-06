@@ -22,6 +22,7 @@
     },
     "files": [
       "desktop/electron/**/*",
+      "desktop/assets/**/*",
       "package.json"
     ],
     "extraResources": [

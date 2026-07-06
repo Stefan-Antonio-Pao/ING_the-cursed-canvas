@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title id="page-title">The Cursed Canvas</title>
-    <link rel="icon" type="image/png" id="game-favicon" href="/static/icons/skeuomorphic.png?v=icon-gallery-20260703-four-icons">
-    <link rel="apple-touch-icon" id="game-apple-touch-icon" href="/static/icons/skeuomorphic.png?v=icon-gallery-20260703-four-icons">
+    <link rel="icon" type="image/png" id="game-favicon" href="/static/icons/clean.png?v=icon-gallery-20260705-clean-default">
+    <link rel="apple-touch-icon" id="game-apple-touch-icon" href="/static/icons/clean.png?v=icon-gallery-20260705-clean-default">
     <script>
         (function () {
             var lang = "{{ initial_lang|default('en') }}";
@@ -319,13 +319,14 @@
                     <p class="settings-kicker" data-i18n="settings.icon_kicker">Game Icon</p>
                     <div class="settings-section-heading">
                         <h2 data-i18n="settings.icon_heading">Game Icons</h2>
-                        <p data-i18n="settings.icon_desc">Choose the icon shown in the browser tab and home screen. More icons will arrive in future updates.</p>
+                        <p data-i18n="settings.icon_desc">Choose the runtime icon shown in the browser tab, home screen, and desktop window. The packaged app icon stays Clean.</p>
                     </div>
                     <div class="icon-gallery-grid" id="icon-gallery-grid" aria-live="polite"></div>
-                    <p class="settings-note" id="icon-apply-status" data-i18n="settings.icon_apply_hint">Select an icon to apply it immediately. Your choice is remembered on this device.</p>
+                    <p class="settings-note" id="icon-apply-status" data-i18n="settings.icon_apply_hint">Select an icon to apply it at runtime. Your choice is remembered on this device.</p>
                 </section>
 
                 <p id="settings-status" aria-live="polite"></p>
+                <div class="settings-scroll-tail" aria-hidden="true"></div>
                 </div>
                 <button class="onboarding-arrow settings-flow-arrow" id="settings-flow-next-btn" type="button" aria-label="Next setup step">&rsaquo;</button>
             </div>

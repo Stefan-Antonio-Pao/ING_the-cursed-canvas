@@ -10,7 +10,78 @@ let backendProcess = null;
 let backendReady = false;
 let backendStartupExitPromise = null;
 let backendBaseUrl = null;
-const DEFAULT_WINDOW_ICON_PATH = "/static/icons/skeuomorphic.png?v=icon-gallery-20260703-four-icons";
+const APP_ID = "com.cursedcanvas.game";
+const ICON_CACHE_VERSION = "icon-gallery-20260705-clean-default";
+const GAME_ICON_DEFAULT = "clean";
+const DESKTOP_ICON_OPTIONS = {
+  clean: { webPath: "/static/icons/clean.png" },
+  concept: { webPath: "/static/icons/concept.png" },
+  skeuomorphic: { webPath: "/static/icons/skeuomorphic.png" },
+  flattened: { webPath: "/static/icons/flattened.png" }
+};
+
+function normalizeIconId(iconId) {
+  return Object.prototype.hasOwnProperty.call(DESKTOP_ICON_OPTIONS, iconId) ? iconId : GAME_ICON_DEFAULT;
+}
+
+function inferIconIdFromPath(iconPath) {
+  if (typeof iconPath !== "string") return "";
+  return Object.keys(DESKTOP_ICON_OPTIONS).find((iconId) => iconPath.includes(`${iconId}.png`)) || "";
+}
+
+function preferredWebIconPath(iconId) {
+  const normalizedIconId = normalizeIconId(iconId);
+  return `${DESKTOP_ICON_OPTIONS[normalizedIconId].webPath}?v=${ICON_CACHE_VERSION}`;
+}
+
+function iconPreferencePath() {
+  return path.join(app.getPath("userData"), "icon-preference.json");
+}
+
+function readDesktopIconPreference() {
+  return normalizeIconId(readJsonIfExists(iconPreferencePath()).iconId);
+}
+
+function writeDesktopIconPreference(iconId) {
+  const normalizedIconId = normalizeIconId(iconId);
+  try {
+    fs.mkdirSync(path.dirname(iconPreferencePath()), { recursive: true });
+    fs.writeFileSync(iconPreferencePath(), JSON.stringify({ iconId: normalizedIconId }, null, 2), "utf8");
+  } catch (err) {
+    appendLog(`Icon preference save failed: ${err.message || String(err)}`);
+  }
+  return normalizedIconId;
+}
+
+function desktopIconAssetPath(iconId, extension) {
+  const normalizedIconId = normalizeIconId(iconId);
+  const preferredExtension = extension || (process.platform === "win32" ? "ico" : "png");
+  const candidates = [
+    path.join(__dirname, "..", "assets", "icons", `${normalizedIconId}.${preferredExtension}`),
+    path.join(__dirname, "..", "assets", "icons", `${normalizedIconId}.png`),
+    path.join(__dirname, "..", "assets", preferredExtension === "ico" ? "icon.ico" : "icon.png"),
+    path.join(__dirname, "..", "assets", "icon.png")
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function createNativeIconImage(iconId) {
+  const iconPath = desktopIconAssetPath(iconId);
+  if (!iconPath) return { image: nativeImage.createEmpty(), iconPath: null };
+  return { image: nativeImage.createFromPath(iconPath), iconPath };
+}
+
+function parseIconRequest(iconRequest) {
+  const iconPath = typeof iconRequest === "string"
+    ? iconRequest
+    : (iconRequest && typeof iconRequest.iconPath === "string" ? iconRequest.iconPath : "");
+  const requestedIconId = iconRequest && typeof iconRequest === "object" ? iconRequest.iconId : "";
+  const iconId = normalizeIconId(requestedIconId || inferIconIdFromPath(iconPath));
+  return {
+    iconId,
+    iconPath: iconPath || preferredWebIconPath(iconId)
+  };
+}
 
 function logPath() {
   return path.join(app.getPath("userData"), "desktop.log");
@@ -226,15 +297,22 @@ function fetchImageBuffer(url, timeoutMs = 8000) {
   });
 }
 
-async function applyWindowIconFromPath(iconPath) {
+async function applyWindowIconFromPath(iconRequest, options = {}) {
   if (!mainWindow) return false;
+  const { iconId, iconPath } = parseIconRequest(iconRequest);
   const url = resolveIconUrl(iconPath);
-  if (!url) return false;
   try {
-    const buffer = await fetchImageBuffer(url);
-    const image = nativeImage.createFromBuffer(buffer);
+    const nativeIcon = createNativeIconImage(iconId);
+    let image = nativeIcon.image;
+    let source = nativeIcon.iconPath;
     if (image.isEmpty()) {
-      appendLog(`Window icon image is empty for ${url}`);
+      if (!url) return false;
+      const buffer = await fetchImageBuffer(url);
+      image = nativeImage.createFromBuffer(buffer);
+      source = url;
+    }
+    if (image.isEmpty()) {
+      appendLog(`Window icon image is empty for ${source || iconPath}`);
       return false;
     }
     let applied = false;
@@ -252,7 +330,8 @@ async function applyWindowIconFromPath(iconPath) {
         appendLog(`Dock icon update failed: ${err.message || String(err)}`);
       }
     }
-    if (applied) appendLog(`Window icon updated from ${url}`);
+    if (applied && options.persist !== false) writeDesktopIconPreference(iconId);
+    if (applied) appendLog(`Window icon updated to ${iconId} from ${source || iconPath}`);
     return applied;
   } catch (err) {
     appendLog(`Window icon update failed: ${err.message || String(err)}`);
@@ -332,8 +411,8 @@ async function startBackend(config) {
   });
 }
 
-function createWindow(config) {
-  mainWindow = new BrowserWindow({
+function createWindow(config, preferredIconId) {
+  const windowOptions = {
     width: config.window?.width || 1280,
     height: config.window?.height || 820,
     minWidth: 1080,
@@ -345,7 +424,12 @@ function createWindow(config) {
       nodeIntegration: false,
       contextIsolation: true
     }
-  });
+  };
+  const nativeIconPath = desktopIconAssetPath(preferredIconId);
+  if (nativeIconPath) windowOptions.icon = nativeIconPath;
+
+  mainWindow = new BrowserWindow(windowOptions);
+  void applyWindowIconFromPath({ iconId: preferredIconId }, { persist: false });
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.loadURL("data:text/html;charset=utf-8,<body style='margin:0;background:#07090f;color:#d8d1bf;font-family:serif;display:grid;place-items:center;height:100vh'>Loading The Cursed Canvas...</body>");
@@ -353,12 +437,13 @@ function createWindow(config) {
 
 async function boot() {
   const config = loadConfig();
-  createWindow(config);
+  const preferredIconId = readDesktopIconPreference();
+  createWindow(config, preferredIconId);
   try {
     const url = await startBackend(config);
     await Promise.race([waitForHttp(url), backendStartupExitPromise]);
     probeLocalRuntime(url);
-    await applyWindowIconFromPath(DEFAULT_WINDOW_ICON_PATH);
+    await applyWindowIconFromPath({ iconId: preferredIconId }, { persist: false });
     await mainWindow.loadURL(url);
   } catch (err) {
     appendLog(`Startup failed: ${err.message || String(err)}`);
@@ -367,15 +452,19 @@ async function boot() {
   }
 }
 
-ipcMain.handle("desktop:set-window-icon", async (_event, iconPath) => {
-  if (typeof iconPath !== "string" || !iconPath) return false;
-  return applyWindowIconFromPath(iconPath);
+ipcMain.handle("desktop:set-window-icon", async (_event, iconRequest) => {
+  if (!iconRequest) return false;
+  return applyWindowIconFromPath(iconRequest, { persist: true });
 });
 
 ipcMain.handle("desktop:quit-app", async () => {
   app.quit();
   return true;
 });
+
+if (process.platform === "win32") {
+  app.setAppUserModelId(APP_ID);
+}
 
 app.whenReady().then(() => {
   configureMediaPermissions();

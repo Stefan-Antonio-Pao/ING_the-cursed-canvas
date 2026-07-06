@@ -49,7 +49,7 @@ each artwork has lost.
 The v3 icon set includes four selectable styles. The default desktop asset is generated from the
 same visual direction.
 
-| Skeuomorphic | Flattened | Concept Version | Clean Version |
+| Skeuomorphic | Flattened | Concept | Clean |
 |--------------|-----------|-----------------|---------------|
 | <img src="static/icons/skeuomorphic.png" alt="Skeuomorphic icon" width="96"> | <img src="static/icons/flattened.png" alt="Flattened icon" width="96"> | <img src="static/icons/concept.png" alt="Concept icon" width="96"> | <img src="static/icons/clean.png" alt="Clean icon" width="96"> |
 

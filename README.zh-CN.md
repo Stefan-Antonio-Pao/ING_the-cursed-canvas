@@ -46,9 +46,9 @@
 
 v3 图标组包含四种可选样式。默认桌面资源也沿用同一视觉方向生成。
 
-| 拟物化 | 扁平化 | 概念版本 | 简洁版本 |
+| 拟物化 | 扁平化 | 概念 | 纯净 |
 |--------|--------|----------|----------|
-| <img src="static/icons/skeuomorphic.png" alt="拟物化图标" width="96"> | <img src="static/icons/flattened.png" alt="扁平化图标" width="96"> | <img src="static/icons/concept.png" alt="概念版本图标" width="96"> | <img src="static/icons/clean.png" alt="简洁版本图标" width="96"> |
+| <img src="static/icons/skeuomorphic.png" alt="拟物化图标" width="96"> | <img src="static/icons/flattened.png" alt="扁平化图标" width="96"> | <img src="static/icons/concept.png" alt="概念图标" width="96"> | <img src="static/icons/clean.png" alt="纯净图标" width="96"> |
 
 ## 快速开始
 
